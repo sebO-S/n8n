@@ -82,6 +82,17 @@
         "$state": {
             "type": "string"
         },
+        "Account_Name": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
         "Created_By": {
             "type": "object",
             "properties": {
@@ -104,9 +115,6 @@
         },
         "Full_Name": {
             "type": "string"
-        },
-        "Home_Phone": {
-            "type": "null"
         },
         "id": {
             "type": "string"
@@ -134,9 +142,6 @@
         "Modified_Time": {
             "type": "string"
         },
-        "Other_Phone": {
-            "type": "null"
-        },
         "Owner": {
             "type": "object",
             "properties": {
@@ -151,15 +156,29 @@
                 }
             }
         },
+        "Reporting_To": {
+            "type": "null"
+        },
+        "Tag": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "Unsubscribed_Mode": {
             "type": "null"
         },
         "Unsubscribed_Time": {
             "type": "null"
-        },
-        "Vendor_Name": {
-            "type": "null"
         }
     },
-    "version": 6
+    "version": 10
 }

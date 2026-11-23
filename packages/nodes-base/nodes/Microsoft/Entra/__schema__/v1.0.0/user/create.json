@@ -1,9 +1,6 @@
 {
     "type": "object",
     "properties": {
-        "@odata.context": {
-            "type": "string"
-        },
         "businessPhones": {
             "type": "array",
             "items": {
@@ -16,15 +13,15 @@
         "displayName": {
             "type": "string"
         },
-        "employeeHireDate": {
-            "type": "string"
-        },
         "id": {
             "type": "string"
+        },
+        "preferredLanguage": {
+            "type": "null"
         },
         "userPrincipalName": {
             "type": "string"
         }
     },
-    "version": 2
+    "version": 4
 }

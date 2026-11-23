@@ -4,6 +4,9 @@
         "$approval": {
             "type": "object",
             "properties": {
+                "add_approver": {
+                    "type": "boolean"
+                },
                 "approve": {
                     "type": "boolean"
                 },
@@ -82,11 +85,37 @@
         "$state": {
             "type": "string"
         },
+        "$zia_owner_assignment": {
+            "type": "string"
+        },
+        "Address": {
+            "type": "string"
+        },
+        "Coordinates": {
+            "type": "string"
+        },
+        "Created_By": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
         "Created_Time": {
             "type": "string"
         },
         "Email_Opt_Out": {
             "type": "boolean"
+        },
+        "Fax": {
+            "type": "null"
         },
         "Full_Name": {
             "type": "string"
@@ -97,8 +126,31 @@
         "Last_Name": {
             "type": "string"
         },
+        "Latitude": {
+            "type": "null"
+        },
         "Locked__s": {
             "type": "boolean"
+        },
+        "Longitude": {
+            "type": "null"
+        },
+        "Modified_By": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "Modified_Time": {
+            "type": "string"
         },
         "Owner": {
             "type": "object",
@@ -135,5 +187,5 @@
             "type": "null"
         }
     },
-    "version": 5
+    "version": 9
 }

@@ -1,7 +1,10 @@
-import type { SafetySetting } from '@google/generative-ai';
-import { ProjectsClient } from '@google-cloud/resource-manager';
-import { ChatVertexAI } from '@langchain/google-vertexai';
-import { formatPrivateKey } from 'n8n-nodes-base/dist/utils/utilities';
+import type { GoogleAISafetySetting } from '@langchain/google-common';
+import { ChatVertexAI, type ChatVertexAIInput } from '@langchain/google-vertexai';
+import {
+	makeN8nLlmFailedAttemptHandler,
+	N8nLlmTracing,
+	getConnectionHintNoticeField,
+} from '@n8n/ai-utilities';
 import {
 	NodeConnectionTypes,
 	type INodeType,
@@ -10,15 +13,32 @@ import {
 	type SupplyData,
 	type ILoadOptionsFunctions,
 	type JsonObject,
+	type NodeError,
 	NodeOperationError,
+	validateNodeParameters,
 } from 'n8n-workflow';
 
-import { getConnectionHintNoticeField } from '@utils/sharedFields';
+import { MODEL_SELECTION_HINT } from '@utils/model-builder-hints';
 
-import { makeErrorFromStatus } from './error-handling';
-import { additionalOptions } from '../gemini-common/additional-options';
-import { makeN8nLlmFailedAttemptHandler } from '../n8nLlmFailedAttemptHandler';
-import { N8nLlmTracing } from '../N8nLlmTracing';
+import { extractGoogleErrorMessage, makeErrorFromStatus } from './error-handling';
+import { getAdditionalOptions } from '../gemini-common/additional-options';
+import { getVertexEndpoint, vertexLocationField } from '../gemini-common/vertex-location';
+
+import {
+	googleVertexAuthentication,
+	googleVertexCredentials,
+	googleVertexAiCredentialTest,
+	resolveGoogleVertexCredentials,
+	searchGoogleProjects,
+} from '@utils/google-vertex';
+
+function errorDescriptionMapper(error: NodeError) {
+	if (error.description?.includes('properties: should be non-empty for OBJECT type')) {
+		return 'Google Vertex requires at least one <a href="https://docs.n8n.io/advanced-ai/examples/using-the-fromai-function/" target="_blank">dynamic parameter</a> when using tools';
+	}
+
+	return error.description ?? 'Unknown error';
+}
 
 export class LmChatGoogleVertex implements INodeType {
 	description: INodeTypeDescription = {
@@ -51,17 +71,14 @@ export class LmChatGoogleVertex implements INodeType {
 
 		outputs: [NodeConnectionTypes.AiLanguageModel],
 		outputNames: ['Model'],
-		credentials: [
-			{
-				name: 'googleApi',
-				required: true,
-			},
-		],
+		credentials: googleVertexCredentials,
 		properties: [
+			googleVertexAuthentication,
 			getConnectionHintNoticeField([NodeConnectionTypes.AiChain, NodeConnectionTypes.AiAgent]),
 			{
 				displayName: 'Project ID',
 				name: 'projectId',
+				displayOptions: { show: { authentication: ['googleApi'] } },
 				type: 'resourceLocator',
 				default: { mode: 'list', value: '' },
 				required: true,
@@ -88,95 +105,90 @@ export class LmChatGoogleVertex implements INodeType {
 				type: 'string',
 				description:
 					'The model which will generate the completion. <a href="https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models">Learn more</a>.',
-				default: 'gemini-1.5-flash',
+				default: 'gemini-2.5-flash',
+				builderHint: {
+					propertyHint:
+						'Choose a stable Gemini model from the Vertex model list for the configured project and location. Do not copy Gemini API model IDs into Vertex without checking the list. ' +
+						MODEL_SELECTION_HINT,
+				},
 			},
-			additionalOptions,
+			vertexLocationField,
+			getAdditionalOptions({ supportsThinkingBudget: true }),
 		],
 	};
 
 	methods = {
+		credentialTest: { googleVertexAiCredentialTest },
 		listSearch: {
-			async gcpProjectsList(this: ILoadOptionsFunctions) {
-				const results: Array<{ name: string; value: string }> = [];
-
-				const credentials = await this.getCredentials('googleApi');
-				const privateKey = formatPrivateKey(credentials.privateKey as string);
-				const email = (credentials.email as string).trim();
-
-				const client = new ProjectsClient({
-					credentials: {
-						client_email: email,
-						private_key: privateKey,
-					},
-				});
-
-				const [projects] = await client.searchProjects();
-
-				for (const project of projects) {
-					if (project.projectId) {
-						results.push({
-							name: project.displayName ?? project.projectId,
-							value: project.projectId,
-						});
-					}
-				}
-
-				return { results };
+			async gcpProjectsList(
+				this: ILoadOptionsFunctions,
+				filter?: string,
+				paginationToken?: string,
+			) {
+				return await searchGoogleProjects(
+					await this.getCredentials('googleApi'),
+					filter,
+					paginationToken,
+				);
 			},
 		},
 	};
 
 	async supplyData(this: ISupplyDataFunctions, itemIndex: number): Promise<SupplyData> {
-		const credentials = await this.getCredentials('googleApi');
-		const privateKey = formatPrivateKey(credentials.privateKey as string);
-		const email = (credentials.email as string).trim();
-		const region = credentials.region as string;
+		const { projectId, credentials, location } = await resolveGoogleVertexCredentials(
+			this,
+			itemIndex,
+		);
+		const endpoint = getVertexEndpoint(location);
 
 		const modelName = this.getNodeParameter('modelName', itemIndex) as string;
-
-		const projectId = this.getNodeParameter('projectId', itemIndex, '', {
-			extractValue: true,
-		}) as string;
 
 		const options = this.getNodeParameter('options', itemIndex, {
 			maxOutputTokens: 2048,
 			temperature: 0.4,
 			topK: 40,
 			topP: 0.9,
-		}) as {
-			maxOutputTokens: number;
-			temperature: number;
-			topK: number;
-			topP: number;
-		};
+		});
+
+		// Validate options parameter
+		validateNodeParameters(
+			options,
+			{
+				maxOutputTokens: { type: 'number', required: false },
+				temperature: { type: 'number', required: false },
+				topK: { type: 'number', required: false },
+				topP: { type: 'number', required: false },
+				thinkingBudget: { type: 'number', required: false },
+			},
+			this.getNode(),
+		);
 
 		const safetySettings = this.getNodeParameter(
 			'options.safetySettings.values',
 			itemIndex,
 			null,
-		) as SafetySetting[];
+		) as GoogleAISafetySetting[];
 
 		try {
-			const model = new ChatVertexAI({
+			const modelConfig: ChatVertexAIInput = {
 				authOptions: {
 					projectId,
-					credentials: {
-						client_email: email,
-						private_key: privateKey,
-					},
+					credentials,
 				},
-				location: region,
+				location,
+				...(endpoint ? { endpoint } : {}),
 				model: modelName,
 				topK: options.topK,
 				topP: options.topP,
 				temperature: options.temperature,
 				maxOutputTokens: options.maxOutputTokens,
 				safetySettings,
-				callbacks: [new N8nLlmTracing(this)],
+				callbacks: [new N8nLlmTracing(this, { errorDescriptionMapper })],
 				// Handle ChatVertexAI invocation errors to provide better error messages
 				onFailedAttempt: makeN8nLlmFailedAttemptHandler(this, (error: any) => {
 					// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-					const customError = makeErrorFromStatus(Number(error?.response?.status), {
+					const status = Number(error?.response?.status);
+					const customError = makeErrorFromStatus(status, {
 						modelName,
 					});
 
@@ -184,9 +196,28 @@ export class LmChatGoogleVertex implements INodeType {
 						throw new NodeOperationError(this.getNode(), error as JsonObject, customError);
 					}
 
+					if (status === 400) {
+						// Surface Google's error detail; a bare rethrow would hide it behind a
+						// generic "Bad request" wrapper
+						throw new NodeOperationError(this.getNode(), error as JsonObject, {
+							message: 'Bad request - please check your parameters',
+							description:
+								extractGoogleErrorMessage(error as { message?: string }) ??
+								// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+								(typeof error?.message === 'string' ? (error.message as string) : undefined),
+						});
+					}
+
 					throw error;
 				}),
-			});
+			};
+
+			// Add thinkingBudget if specified
+			if (options.thinkingBudget !== undefined) {
+				modelConfig.thinkingBudget = options.thinkingBudget;
+			}
+
+			const model = new ChatVertexAI(modelConfig);
 
 			return {
 				response: model,

@@ -2,7 +2,7 @@
 import { ref } from 'vue';
 
 import { useI18n } from '../../composables/useI18n';
-import AssistantIcon from '../AskAssistantIcon/AssistantIcon.vue';
+import N8nIcon from '../N8nIcon';
 import AssistantText from '../AskAssistantText/AssistantText.vue';
 
 const { t } = useI18n();
@@ -36,7 +36,12 @@ function onMouseLeave() {
 		<div v-if="props.unreadCount" :class="$style.num">
 			{{ props.unreadCount }}
 		</div>
-		<AssistantIcon v-else size="large" :theme="hovering ? 'blank' : 'default'" />
+		<N8nIcon
+			v-else
+			icon="n8n-assistant"
+			:size="18"
+			:color="hovering ? '--color--neutral-white' : undefined"
+		/>
 		<div v-show="hovering" :class="$style.text">
 			<div>
 				<AssistantText
@@ -53,9 +58,9 @@ function onMouseLeave() {
 
 <style lang="scss" module>
 .button {
-	border: var(--border-base);
-	background: var(--color-foreground-xlight);
-	border-radius: var(--border-radius-base);
+	border: var(--border);
+	background: var(--color--foreground--tint-2);
+	border-radius: var(--radius);
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -66,7 +71,7 @@ function onMouseLeave() {
 	&:hover {
 		border: 0;
 		cursor: pointer;
-		background: var(--color-assistant-highlight-reverse);
+		background: var(--assistant--color--highlight-gradient--reverse);
 
 		> div {
 			background: transparent;
@@ -75,15 +80,15 @@ function onMouseLeave() {
 }
 
 .num {
-	color: var(--prim-color-white);
-	background: var(--color-assistant-highlight-reverse);
+	color: var(--color--neutral-white);
+	background: var(--assistant--color--highlight-gradient--reverse);
 	border-radius: 50%;
-	width: var(--spacing-s);
-	height: var(--spacing-s);
+	width: var(--spacing--sm);
+	height: var(--spacing--sm);
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	font-size: var(--font-size-3xs);
+	font-size: var(--font-size--3xs);
 }
 
 .text {

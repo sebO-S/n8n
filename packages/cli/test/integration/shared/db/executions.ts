@@ -1,13 +1,14 @@
 import { mockInstance } from '@n8n/backend-test-utils';
-import type { ExecutionEntity, ExecutionData } from '@n8n/db';
+import type { ExecutionEntity } from '@n8n/db';
 import {
-	ExecutionDataRepository,
+	ExecutionData,
 	ExecutionMetadataRepository,
 	ExecutionRepository,
 	AnnotationTagRepository,
 } from '@n8n/db';
 import { Container } from '@n8n/di';
-import type { AnnotationVote, IWorkflowBase } from 'n8n-workflow';
+import { DataSource } from '@n8n/typeorm';
+import type { AnnotationVote, ExecutionStatus, IWorkflowBase } from 'n8n-workflow';
 
 import { ExecutionService } from '@/executions/execution.service';
 import { Telemetry } from '@/telemetry';
@@ -44,6 +45,10 @@ export async function createExecution(
 		deletedAt,
 		metadata,
 		createdAt,
+		jsonSizeBytes,
+		binaryDataSizeBytes,
+		workflowVersionId,
+		tracingContext,
 	} = attributes;
 
 	const execution = await Container.get(ExecutionRepository).save({
@@ -56,6 +61,10 @@ export async function createExecution(
 		waitTill: waitTill ?? null,
 		status: status ?? 'success',
 		deletedAt,
+		...(jsonSizeBytes !== undefined && { jsonSizeBytes }),
+		...(binaryDataSizeBytes !== undefined && { binaryDataSizeBytes }),
+		...(workflowVersionId !== undefined && { workflowVersionId }),
+		...(tracingContext !== undefined && { tracingContext }),
 	});
 
 	if (metadata?.length) {
@@ -68,11 +77,13 @@ export async function createExecution(
 		await Container.get(ExecutionMetadataRepository).save(metadataToSave);
 	}
 
-	await Container.get(ExecutionDataRepository).save({
-		data: data ?? '[]',
-		workflowData: workflow ?? {},
-		executionId: execution.id,
-	});
+	await Container.get(DataSource)
+		.getRepository(ExecutionData)
+		.save({
+			data: data ?? '[]',
+			workflowData: workflow ?? {},
+			executionId: execution.id,
+		});
 
 	return execution;
 }
@@ -102,6 +113,20 @@ export async function createWaitingExecution(workflow: IWorkflowBase) {
 		{ finished: false, waitTill: new Date(), status: 'waiting' },
 		workflow,
 	);
+}
+
+/**
+ * Store an execution with a given status in the DB and assign it to a workflow.
+ */
+export async function createdExecutionWithStatus(workflow: IWorkflowBase, status: ExecutionStatus) {
+	const execution: Partial<ExecutionEntity> = {
+		status,
+		finished: status === 'success' ? true : false,
+		stoppedAt: ['crashed', 'error'].includes(status) ? new Date() : undefined,
+		waitTill: status === 'waiting' ? new Date() : undefined,
+	};
+
+	return await createExecution(execution, workflow);
 }
 
 export async function annotateExecution(

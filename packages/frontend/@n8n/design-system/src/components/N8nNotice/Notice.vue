@@ -43,6 +43,7 @@ const displayContent = computed(() =>
 				'data-action-parameter-creatorview',
 			],
 		},
+		allowedTags: ['a', 'ul', 'li'],
 	}),
 );
 
@@ -86,46 +87,69 @@ const onClick = (event: MouseEvent) => {
 
 <style lang="scss" module>
 .notice {
-	font-size: var(--font-size-2xs);
+	font-size: var(--font-size--2xs);
 	display: flex;
-	color: var(--color-notice-font);
-	margin: var(--notice-margin, var(--spacing-s) 0);
-	padding: var(--spacing-2xs);
-	background-color: var(--background-color);
-	border-width: 1px 1px 1px 7px;
-	border-style: solid;
-	border-color: var(--border-color);
-	border-radius: var(--border-radius-small);
-	line-height: var(--font-line-height-compact);
+	color: var(--notice--color--text);
+	margin: var(--notice--margin, var(--spacing--sm) 0);
+	padding: var(--spacing--2xs);
+	background-color: var(--notice--color--background);
+	border: 1px solid var(--notice--color--border-color);
+	border-radius: var(--radius--xs);
+	line-height: var(--line-height--sm);
 
 	a {
-		font-weight: var(--font-weight-bold);
+		font-weight: var(--font-weight--medium);
+	}
+
+	ul {
+		padding-left: var(--spacing--lg);
+		margin: var(--spacing--xs) 0;
+	}
+
+	li {
+		margin-bottom: var(--spacing--4xs);
 	}
 }
 
 .warning {
-	--border-color: var(--color-notice-warning-border);
-	--background-color: var(--color-notice-warning-background);
+	--notice--color--border-color: var(--color--yellow-500);
+	--notice--color--background: light-dark(
+		var(--color--yellow-50),
+		color-mix(in srgb, var(--color--yellow-500), transparent 80%)
+	);
+	--notice--color--text: light-dark(var(--color--yellow-950), var(--text-color));
 }
 
 .danger {
-	--border-color: var(--color-danger-tint-1);
-	--background-color: var(--color-danger-tint-2);
+	--notice--color--border-color: var(--color--red-500);
+	--notice--color--background: light-dark(
+		var(--color--red-50),
+		color-mix(in srgb, var(--color--red-500), transparent 80%)
+	);
+	--notice--color--text: light-dark(var(--color--red-950), var(--text-color));
 }
 
 .success {
-	--border-color: var(--color-success-tint-1);
-	--background-color: var(--color-success-tint-2);
+	--notice--color--border-color: var(--color--green-500);
+	--notice--color--background: light-dark(
+		var(--color--green-50),
+		color-mix(in srgb, var(--color--green-500), transparent 80%)
+	);
+	--notice--color--text: light-dark(var(--color--green-950), var(--text-color));
 }
 
 .info {
-	--border-color: var(--color-info-tint-1);
-	--background-color: var(--color-info-tint-2);
+	--notice--color--border-color: var(--color--blue-500);
+	--notice--color--background: light-dark(
+		var(--color--blue-50),
+		color-mix(in srgb, var(--color--blue-500), transparent 80%)
+	);
+	--notice--color--text: light-dark(var(--color--blue-950), var(--text-color));
 }
 
 .expanded {
 	+ span {
-		margin-top: var(--spacing-4xs);
+		margin-top: var(--spacing--4xs);
 		display: block;
 	}
 }

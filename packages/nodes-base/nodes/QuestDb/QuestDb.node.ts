@@ -7,16 +7,18 @@ import type {
 import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 import pgPromise from 'pg-promise';
 
+import { getDateAsStringTypeParsers } from '@utils/postgres';
+
 import { pgInsert, pgQueryV2 } from '../Postgres/v1/genericFunctions';
 
 export class QuestDb implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'QuestDB',
 		name: 'questDb',
-		// eslint-disable-next-line n8n-nodes-base/node-class-description-icon-not-svg
+
 		icon: 'file:questdb.png',
 		group: ['input'],
-		version: 1,
+		version: [1, 1.1, 1.2],
 		description: 'Get, add and update data in QuestDB',
 		defaults: {
 			name: 'QuestDB',
@@ -212,7 +214,15 @@ export class QuestDb implements INodeType {
 			sslmode: (credentials.ssl as string) || 'disable',
 		};
 
-		const db = pgp(config);
+		const db = pgp({
+			...config,
+			// Return date/timestamp columns as strings so node output stays JSON-safe
+			...(this.getNode().typeVersion >= 1.1
+				? // No version of this node opts in to the zoneless timestamp output that
+					// Postgres 2.9 added. Keep the older reading until one does, see ENT-882.
+					{ types: getDateAsStringTypeParsers(pgp, { legacyUtcTimestamps: true }) }
+				: {}),
+		});
 
 		let returnItems: INodeExecutionData[] = [];
 
@@ -230,6 +240,7 @@ export class QuestDb implements INodeType {
 			const queryResult = await pgQueryV2.call(this, pgp, db, items, this.continueOnFail(), {
 				overrideMode: mode,
 				resolveExpression: true,
+				literalExpressions: this.getNode().typeVersion >= 1.2,
 			});
 
 			returnItems = this.helpers.returnJsonArray(queryResult);

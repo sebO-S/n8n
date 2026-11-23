@@ -4,9 +4,10 @@ import type {
 	INodeExecutionData,
 	INodeProperties,
 } from 'n8n-workflow';
-import { ApplicationError, NodeOperationError, sleep } from 'n8n-workflow';
+import { NodeOperationError, requestPath } from 'n8n-workflow';
 
-import { getResolvables, updateDisplayOptions } from '@utils/utilities';
+import { sleep } from '@n8n/utils/sleep';
+import { resolveExpressions, updateDisplayOptions } from '@utils/utilities';
 
 import type { ResponseWithJobReference } from '../../helpers/interfaces';
 import { prepareOutput } from '../../helpers/utils';
@@ -219,6 +220,7 @@ const displayOptions = {
 export const description = updateDisplayOptions(displayOptions, properties);
 
 export async function execute(this: IExecuteFunctions): Promise<INodeExecutionData[]> {
+	const abortSignal = this.getExecutionCancelSignal();
 	const items = this.getInputData();
 	const length = items.length;
 
@@ -230,7 +232,7 @@ export async function execute(this: IExecuteFunctions): Promise<INodeExecutionDa
 
 	for (let i = 0; i < length; i++) {
 		try {
-			let sqlQuery = this.getNodeParameter('sqlQuery', i) as string;
+			const rawSqlQuery = this.getNodeParameter('sqlQuery', i) as string;
 
 			const options = this.getNodeParameter('options', i) as {
 				defaultDataset?: string;
@@ -250,9 +252,11 @@ export async function execute(this: IExecuteFunctions): Promise<INodeExecutionDa
 				extractValue: true,
 			});
 
-			for (const resolvable of getResolvables(sqlQuery)) {
-				sqlQuery = sqlQuery.replace(resolvable, this.evaluateExpression(resolvable, i) as string);
-			}
+			const sqlQuery = resolveExpressions(
+				rawSqlQuery,
+				(resolvable) => this.evaluateExpression(resolvable, i),
+				{ legacy: this.getNode().typeVersion < 2.2 },
+			);
 
 			let rawOutput = false;
 			let includeSchema = false;
@@ -315,7 +319,7 @@ export async function execute(this: IExecuteFunctions): Promise<INodeExecutionDa
 			const response: ResponseWithJobReference = await googleBigQueryApiRequest.call(
 				this,
 				'POST',
-				`/v2/projects/${projectId}/jobs`,
+				requestPath`/v2/projects/${projectId}/jobs`,
 				{
 					configuration: {
 						query: body,
@@ -341,7 +345,7 @@ export async function execute(this: IExecuteFunctions): Promise<INodeExecutionDa
 				const queryResponse: IDataObject = await googleBigQueryApiRequestAllItems.call(
 					this,
 					'GET',
-					`/v2/projects/${projectId}/queries/${jobId}`,
+					requestPath`/v2/projects/${projectId}/queries/${jobId}`,
 					undefined,
 					qs,
 				);
@@ -400,10 +404,13 @@ export async function execute(this: IExecuteFunctions): Promise<INodeExecutionDa
 	}
 
 	let waitTime = 1000;
-	while (jobs.length > 0) {
-		const completedJobs: string[] = [];
+	outerLoop: while (jobs.length > 0) {
+		const settledJobs: string[] = [];
 
 		for (const job of jobs) {
+			if (abortSignal?.aborted) {
+				break outerLoop;
+			}
 			try {
 				const qs: IDataObject = job.location ? { location: job.location } : {};
 
@@ -414,19 +421,20 @@ export async function execute(this: IExecuteFunctions): Promise<INodeExecutionDa
 				const response: IDataObject = await googleBigQueryApiRequestAllItems.call(
 					this,
 					'GET',
-					`/v2/projects/${job.projectId}/queries/${job.jobId}`,
+					requestPath`/v2/projects/${job.projectId}/queries/${job.jobId}`,
 					undefined,
 					qs,
 				);
 
 				if (response.jobComplete) {
-					completedJobs.push(job.jobId);
+					settledJobs.push(job.jobId);
 
 					returnData.push(...prepareOutput.call(this, response, job.i, job.raw, job.includeSchema));
 				}
 				if ((response?.errors as IDataObject[])?.length) {
 					const errorMessages = (response.errors as IDataObject[]).map((error) => error.message);
-					throw new ApplicationError(
+					throw new NodeOperationError(
+						this.getNode(),
 						`Error(s) ocurring while executing query from item ${job.i.toString()}: ${errorMessages.join(
 							', ',
 						)}`,
@@ -435,6 +443,7 @@ export async function execute(this: IExecuteFunctions): Promise<INodeExecutionDa
 				}
 			} catch (error) {
 				if (this.continueOnFail()) {
+					settledJobs.push(job.jobId);
 					const executionErrorData = this.helpers.constructExecutionMetaData(
 						this.helpers.returnJsonArray({ error: error.message }),
 						{ itemData: { item: job.i } },
@@ -449,7 +458,7 @@ export async function execute(this: IExecuteFunctions): Promise<INodeExecutionDa
 			}
 		}
 
-		jobs = jobs.filter((job) => !completedJobs.includes(job.jobId));
+		jobs = jobs.filter((job) => !settledJobs.includes(job.jobId));
 
 		if (jobs.length > 0) {
 			await sleep(waitTime);

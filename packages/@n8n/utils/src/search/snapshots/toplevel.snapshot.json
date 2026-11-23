@@ -2253,7 +2253,7 @@
 					],
 					"credentialDocumentation": [
 						{
-							"url": "https://docs.n8n.io/integrations/credentials/sendemail/"
+							"url": "https://docs.n8n.io/integrations/builtin/credentials/sendemail/"
 						}
 					]
 				}
@@ -11618,9 +11618,9 @@
 		"key": "@n8n/n8n-nodes-langchain.lmChatAzureOpenAi",
 		"subcategory": "*",
 		"properties": {
-			"displayName": "Azure OpenAI Chat Model",
+			"displayName": "Microsoft Foundry Chat Model",
 			"defaults": {
-				"name": "Azure OpenAI Chat Model"
+				"name": "Microsoft Foundry Chat Model"
 			},
 			"description": "For advanced usage with an AI chain",
 			"name": "@n8n/n8n-nodes-langchain.lmChatAzureOpenAi",
@@ -11639,7 +11639,15 @@
 							"url": "https://docs.n8n.io/integrations/builtin/cluster-nodes/sub-nodes/n8n-nodes-langchain.lmchatazureopenai/"
 						}
 					]
-				}
+				},
+				"alias": [
+					"Azure",
+					"Azure OpenAI",
+					"Azure OpenAI Chat Model",
+					"Azure AI Foundry",
+					"Foundry",
+					"AOAI"
+				]
 			}
 		},
 		"type": "node"
@@ -12574,7 +12582,7 @@
 					],
 					"credentialDocumentation": [
 						{
-							"url": "https://docs.n8n.io/integrations/credentials/facebookapp/"
+							"url": "https://docs.n8n.io/integrations/builtin/credentials/facebookapp/"
 						}
 					]
 				}
@@ -12606,7 +12614,7 @@
 					],
 					"credentialDocumentation": [
 						{
-							"url": "https://docs.n8n.io/integrations/credentials/facebookleadads/"
+							"url": "https://docs.n8n.io/integrations/builtin/credentials/facebookleadads/"
 						}
 					]
 				}

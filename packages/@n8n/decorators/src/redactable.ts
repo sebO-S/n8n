@@ -1,11 +1,11 @@
-import { UnexpectedError } from 'n8n-workflow';
+import { UnexpectedError } from '@n8n/errors';
 
 type UserLike = {
 	id: string;
 	email?: string;
 	firstName?: string;
 	lastName?: string;
-	role: {
+	role?: {
 		slug: string;
 	};
 };
@@ -24,7 +24,7 @@ function toRedactable(userLike: UserLike) {
 		_email: userLike.email,
 		_firstName: userLike.firstName,
 		_lastName: userLike.lastName,
-		globalRole: userLike.role.slug,
+		globalRole: userLike.role?.slug,
 	};
 }
 

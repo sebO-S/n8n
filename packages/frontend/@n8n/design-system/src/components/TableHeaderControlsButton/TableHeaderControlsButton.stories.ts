@@ -1,4 +1,4 @@
-import type { StoryFn } from '@storybook/vue3';
+import type { StoryFn } from '@storybook/vue3-vite';
 import { ref } from 'vue';
 
 import TableHeaderControlsButton from './TableHeaderControlsButton.vue';
@@ -14,7 +14,7 @@ interface StoryArgs {
 }
 
 export default {
-	title: 'Modules/TableHeaderControlsButton',
+	title: 'Core/TableHeaderControlsButton',
 	component: TableHeaderControlsButton,
 };
 
@@ -55,8 +55,8 @@ const Template: StoryFn<StoryArgs> = (args) => ({
 	`,
 });
 
-export const AllColumnsShown = Template.bind({});
-AllColumnsShown.args = {
+export const Default = Template.bind({});
+Default.args = {
 	columns: [
 		{ key: 'name', label: 'Name', visible: true },
 		{ key: 'email', label: 'Email', visible: true },

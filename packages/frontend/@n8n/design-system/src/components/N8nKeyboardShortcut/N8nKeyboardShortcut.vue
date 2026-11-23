@@ -5,26 +5,24 @@ import { computed } from 'vue';
 import type { KeyboardShortcut } from '../../types/keyboardshortcut';
 
 const props = defineProps<KeyboardShortcut>();
-const { isMacOs } = useDeviceSupport();
+const { isMacOs, controlKeyText } = useDeviceSupport();
 
 const keys = computed(() => {
-	const allKeys = props.keys.map((key) => key.charAt(0).toUpperCase() + key.slice(1));
+	const allKeys: string[] = [];
 
-	if (props.metaKey && isMacOs) {
-		allKeys.unshift('⌘');
-	}
-
-	if (props.metaKey && !isMacOs) {
-		allKeys.unshift('Ctrl');
-	}
-
-	if (props.altKey) {
-		allKeys.unshift(isMacOs ? '⌥' : 'Alt');
+	if (props.metaKey) {
+		allKeys.push(controlKeyText.value);
 	}
 
 	if (props.shiftKey) {
-		allKeys.unshift('⇧');
+		allKeys.push('⇧');
 	}
+
+	if (props.altKey) {
+		allKeys.push(isMacOs ? '⌥' : 'Alt');
+	}
+
+	allKeys.push(...props.keys.map((key) => key.charAt(0).toUpperCase() + key.slice(1)));
 
 	return allKeys;
 });
@@ -42,22 +40,27 @@ const keys = computed(() => {
 .shortcut {
 	display: flex;
 	align-items: center;
-	gap: var(--spacing-4xs);
+	gap: var(--spacing--4xs);
 }
 .keyWrapper {
 	display: flex;
 	justify-content: center;
 	align-items: center;
-	border-radius: var(--border-radius-small);
+	border-radius: var(--radius--2xs);
 	height: 18px;
 	min-width: 18px;
-	padding: 0 var(--spacing-4xs);
-	border: solid 1px var(--color-foreground-base);
-	background: var(--color-background-base);
+	padding: 0 var(--spacing--4xs);
+	border: 0.5px solid var(--n8n--kbd-border, var(--border-color--subtle));
+	box-shadow: var(--shadow--xs);
+	background: var(--n8n--kbd-bg, var(--color--background));
+	background-clip: padding-box;
 }
 
 .key {
-	color: var(--color-text-base);
-	font-size: var(--font-size-3xs);
+	color: var(--n8n--kbd-text, var(--color--text));
+	font-size: var(--font-size--3xs);
+	font-weight: var(--font-weight--bold);
+	font-family: var(--font-family--monospace);
+	font-variant-numeric: tabular-nums;
 }
 </style>

@@ -5,9 +5,9 @@ export class PhilipsHueOAuth2Api implements ICredentialType {
 
 	extends = ['oAuth2Api'];
 
-	displayName = 'PhilipHue OAuth2 API';
+	displayName = 'Philips Hue OAuth2 API';
 
-	documentationUrl = 'philipsHue';
+	documentationUrl = 'philipshue';
 
 	properties: INodeProperties[] = [
 		{

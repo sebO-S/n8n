@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { computed, useCssModule } from 'vue';
+import { useAttrs, useCssModule } from 'vue';
 
 interface CardProps {
 	hoverable?: boolean;
@@ -10,16 +10,24 @@ const props = withDefaults(defineProps<CardProps>(), {
 	hoverable: false,
 });
 
+const attrs = useAttrs();
+
+function hasClickHandler(): boolean {
+	return Boolean(attrs.onClick);
+}
+
 const $style = useCssModule();
-const classes = computed(() => ({
-	card: true,
-	[$style.card]: true,
-	[$style.hoverable]: props.hoverable,
-}));
+function getClasses() {
+	return {
+		card: true,
+		[$style.card]: true,
+		[$style.hoverable]: props.hoverable || hasClickHandler(),
+	};
+}
 </script>
 
 <template>
-	<div :class="classes" v-bind="$attrs">
+	<div :class="getClasses()" v-bind="$attrs">
 		<div v-if="$slots.prepend" data-test-id="card-prepend" :class="$style.icon">
 			<slot name="prepend" />
 		</div>
@@ -46,10 +54,12 @@ const classes = computed(() => ({
 
 <style lang="scss" module>
 .card {
-	border-radius: var(--border-radius-large);
-	border: var(--border-base);
-	background-color: var(--color-background-xlight);
-	padding: var(--card--padding, var(--spacing-s));
+	border-radius: var(--radius);
+	border: var(--border);
+	background-clip: padding-box;
+	box-shadow: var(--shadow--xs);
+	background-color: var(--background--surface);
+	padding: var(--card--padding, var(--spacing--sm));
 	display: flex;
 	flex-direction: row;
 	width: 100%;
@@ -78,6 +88,7 @@ const classes = computed(() => ({
 	display: flex;
 	flex-direction: column;
 	justify-content: space-between;
+	gap: var(--n8n--card-body--gap, 0);
 }
 
 .icon {
@@ -85,19 +96,16 @@ const classes = computed(() => ({
 	display: inline-flex;
 	justify-content: center;
 	align-items: center;
-	margin-right: var(--spacing-s);
+	margin-right: var(--spacing--sm);
 }
 
 .hoverable {
 	cursor: pointer;
-	transition-property: border, color;
-	transition-duration: 0.3s;
-	transition-timing-function: ease;
+	transition: none;
 
 	&:hover,
 	&:focus {
-		color: var(--color-primary);
-		border-color: var(--color-primary);
+		border-color: var(--border-color--strong);
 	}
 }
 

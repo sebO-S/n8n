@@ -1,34 +1,31 @@
 import {
-	passwordSchema,
+	createPasswordSchema,
 	PasswordUpdateRequestDto,
-	SettingsUpdateRequestDto,
+	UserSelfSettingsUpdateRequestDto,
 	UserUpdateRequestDto,
 } from '@n8n/api-types';
 import { Logger } from '@n8n/backend-common';
-import type { User, PublicUser } from '@n8n/db';
-import { UserRepository, AuthenticatedRequest } from '@n8n/db';
-import { Body, Patch, Post, RestController } from '@n8n/decorators';
+import { EventService, PasswordUtility } from '@n8n/backend-services';
+import { GlobalConfig } from '@n8n/config';
+import type { User, PublicUser, AuthIdentity } from '@n8n/db';
+import { AuthenticatedRequest, isPerson, PersonRepository } from '@n8n/db';
+import { Body, createUserKeyedRateLimiter, Patch, Post, RestController } from '@n8n/decorators';
 import { plainToInstance } from 'class-transformer';
 import { Response } from 'express';
 
 import { AuthService } from '@/auth/auth.service';
-import { BadRequestError } from '@/errors/response-errors/bad-request.error';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@n8n/errors';
 import { InvalidMfaCodeError } from '@/errors/response-errors/invalid-mfa-code.error';
-import { EventService } from '@/events/event.service';
 import { ExternalHooks } from '@/external-hooks';
 import { validateEntity } from '@/generic-helpers';
 import { MfaService } from '@/mfa/mfa.service';
 import { MeRequest } from '@/requests';
-import { PasswordUtility } from '@/services/password.utility';
 import { UserService } from '@/services/user.service';
-import { isSamlLicensedAndEnabled } from '@/sso.ee/saml/saml-helpers';
-import {
-	getCurrentAuthenticationMethod,
-	isLdapCurrentAuthenticationMethod,
-	isOidcCurrentAuthenticationMethod,
-} from '@/sso.ee/sso-helpers';
+import { assertPerson } from '@/utils/assert-person';
+import { getCurrentAuthenticationMethod, isSamlLicensedAndEnabled } from '@/sso.ee/sso-helpers';
 
 import { PersonalizationSurveyAnswersV4 } from './survey-answers.dto';
+
 @RestController('/me')
 export class MeController {
 	constructor(
@@ -37,9 +34,10 @@ export class MeController {
 		private readonly authService: AuthService,
 		private readonly userService: UserService,
 		private readonly passwordUtility: PasswordUtility,
-		private readonly userRepository: UserRepository,
+		private readonly personRepository: PersonRepository,
 		private readonly eventService: EventService,
 		private readonly mfaService: MfaService,
+		private readonly globalConfig: GlobalConfig,
 	) {}
 
 	/**
@@ -48,77 +46,58 @@ export class MeController {
 	@Patch('/')
 	async updateCurrentUser(
 		req: AuthenticatedRequest,
-		res: Response,
+		_: Response,
 		@Body payload: UserUpdateRequestDto,
 	): Promise<PublicUser> {
+		assertPerson(req.user);
+
 		const {
 			id: userId,
 			email: currentEmail,
-			mfaEnabled,
 			firstName: currentFirstName,
 			lastName: currentLastName,
 		} = req.user;
 
-		const { email, firstName, lastName } = payload;
-		const isEmailBeingChanged = email !== currentEmail;
+		if (this.isUserManagedByEnv(req.user)) {
+			throw new ForbiddenError(
+				'This account is managed via environment variables and cannot be modified through the API',
+			);
+		}
+
+		const { firstName, lastName } = payload;
 		const isFirstNameChanged = firstName !== currentFirstName;
 		const isLastNameChanged = lastName !== currentLastName;
 
-		if (
-			(isLdapCurrentAuthenticationMethod() || isOidcCurrentAuthenticationMethod()) &&
-			(isEmailBeingChanged || isFirstNameChanged || isLastNameChanged)
-		) {
-			this.logger.debug(
-				`Request to update user failed because ${getCurrentAuthenticationMethod()} user may not change their profile information`,
-				{
-					userId,
-					payload,
-				},
-			);
-			throw new BadRequestError(
-				` ${getCurrentAuthenticationMethod()} user may not change their profile information`,
-			);
-		}
+		// Check if the user is authenticated via SSO - they cannot change their profile info
+		if (isFirstNameChanged || isLastNameChanged) {
+			const ssoIdentity = await this.userService.findSsoIdentity(userId);
 
-		// If SAML is enabled, we don't allow the user to change their email address
-		if (isSamlLicensedAndEnabled() && isEmailBeingChanged) {
-			this.logger.debug(
-				'Request to update user failed because SAML user may not change their email',
-				{
-					userId,
-					payload,
-				},
-			);
-			throw new BadRequestError('SAML user may not change their email');
-		}
-
-		if (mfaEnabled && isEmailBeingChanged) {
-			if (!payload.mfaCode) {
-				throw new BadRequestError('Two-factor code is required to change email');
-			}
-
-			const isMfaCodeValid = await this.mfaService.validateMfa(userId, payload.mfaCode, undefined);
-			if (!isMfaCodeValid) {
-				throw new InvalidMfaCodeError();
+			if (ssoIdentity && this.isAuthIdentityActive(ssoIdentity)) {
+				this.logger.debug(
+					`Request to update user failed because ${ssoIdentity.providerType} user may not change their profile information`,
+					{
+						userId,
+						payload,
+					},
+				);
+				throw new BadRequestError(
+					`${ssoIdentity.providerType.toUpperCase()} user may not change their profile information`,
+				);
 			}
 		}
 
 		await this.externalHooks.run('user.profile.beforeUpdate', [userId, currentEmail, payload]);
 
-		const preUpdateUser = await this.userRepository.findOneByOrFail({ id: userId });
+		const preUpdatePerson = await this.personRepository.findById(userId);
+		if (!preUpdatePerson) throw new NotFoundError('User not found');
 		await this.userService.update(userId, payload);
-		const user = await this.userRepository.findOneOrFail({
-			where: { id: userId },
-			relations: ['role'],
-		});
+		const user = await this.userService.findUserWithAuthIdentities(userId);
 
 		this.logger.info('User updated successfully', { userId });
 
-		this.authService.issueCookie(res, user, req.authInfo?.usedMfa ?? false, req.browserId);
-
-		const changeableFields = ['email', 'firstName', 'lastName'] as const;
+		const changeableFields = ['firstName', 'lastName'] as const;
 		const fieldsChanged = changeableFields.filter(
-			(key) => key in payload && payload[key] !== preUpdateUser[key],
+			(key) => key in payload && payload[key] !== preUpdatePerson[key],
 		);
 
 		this.eventService.emit('user-updated', { user, fieldsChanged });
@@ -130,65 +109,94 @@ export class MeController {
 		return publicUser;
 	}
 
+	private isUserManagedByEnv(user: User): boolean {
+		const { instanceSettingsLoader } = this.globalConfig;
+		return (
+			instanceSettingsLoader.ownerManagedByEnv &&
+			isPerson(user) &&
+			!!user.email &&
+			user.email.toLowerCase() === instanceSettingsLoader.ownerEmail.toLowerCase()
+		);
+	}
+
+	private isAuthIdentityActive(authIdentity: AuthIdentity) {
+		return authIdentity.providerType === getCurrentAuthenticationMethod();
+	}
+
 	/**
 	 * Update the logged-in user's password.
 	 */
-	@Patch('/password', { rateLimit: true })
+	@Patch('/password', {
+		keyedRateLimit: createUserKeyedRateLimiter({}),
+	})
 	async updatePassword(
 		req: AuthenticatedRequest,
 		res: Response,
 		@Body payload: PasswordUpdateRequestDto,
 	) {
-		const { user } = req;
 		const { currentPassword, newPassword, mfaCode } = payload;
+
+		assertPerson(req.user);
+		const person = req.user;
+
+		if (this.isUserManagedByEnv(person)) {
+			throw new ForbiddenError(
+				'This account is managed via environment variables and cannot be modified through the API',
+			);
+		}
 
 		// If SAML is enabled, we don't allow the user to change their password
 		if (isSamlLicensedAndEnabled()) {
 			this.logger.debug('Attempted to change password for user, while SAML is enabled', {
-				userId: user.id,
+				userId: person.id,
 			});
 			throw new BadRequestError(
 				'With SAML enabled, users need to use their SAML provider to change passwords',
 			);
 		}
 
-		if (!user.password) {
+		if (!person.password) {
 			throw new BadRequestError('Requesting user not set up.');
 		}
 
-		const isCurrentPwCorrect = await this.passwordUtility.compare(currentPassword, user.password);
+		const isCurrentPwCorrect = await this.passwordUtility.compare(currentPassword, person.password);
 		if (!isCurrentPwCorrect) {
 			throw new BadRequestError('Provided current password is incorrect.');
 		}
 
-		const passwordValidation = passwordSchema.safeParse(newPassword);
+		const passwordValidation = createPasswordSchema(
+			this.globalConfig.userManagement.password.minLength,
+		).safeParse(newPassword);
 		if (!passwordValidation.success) {
 			throw new BadRequestError(
 				passwordValidation.error.errors.map(({ message }) => message).join(' '),
 			);
 		}
 
-		if (user.mfaEnabled) {
+		if (person.mfaEnabled) {
 			if (typeof mfaCode !== 'string') {
 				throw new BadRequestError('Two-factor code is required to change password.');
 			}
 
-			const isMfaCodeValid = await this.mfaService.validateMfa(user.id, mfaCode, undefined);
+			const isMfaCodeValid = await this.mfaService.validateMfa(person.id, mfaCode, undefined);
 			if (!isMfaCodeValid) {
 				throw new InvalidMfaCodeError();
 			}
 		}
 
-		user.password = await this.passwordUtility.hash(newPassword);
+		person.password = await this.passwordUtility.hash(newPassword);
 
-		const updatedUser = await this.userRepository.save(user, { transaction: false });
-		this.logger.info('Password updated successfully', { userId: user.id });
+		const updatedPerson = await this.personRepository.save(person);
+		this.logger.info('Password updated successfully', { userId: person.id });
 
-		this.authService.issueCookie(res, updatedUser, req.authInfo?.usedMfa ?? false, req.browserId);
+		this.authService.issueCookie(res, updatedPerson, req.authInfo?.usedMfa ?? false, req.browserId);
 
-		this.eventService.emit('user-updated', { user: updatedUser, fieldsChanged: ['password'] });
+		this.eventService.emit('user-updated', { user: updatedPerson, fieldsChanged: ['password'] });
 
-		await this.externalHooks.run('user.password.update', [updatedUser.email, updatedUser.password]);
+		await this.externalHooks.run('user.password.update', [
+			updatedPerson.email,
+			updatedPerson.password,
+		]);
 
 		return { success: true };
 	}
@@ -198,6 +206,8 @@ export class MeController {
 	 */
 	@Post('/survey')
 	async storeSurveyAnswers(req: MeRequest.SurveyAnswers) {
+		assertPerson(req.user);
+
 		const { body: personalizationAnswers } = req;
 
 		if (!personalizationAnswers) {
@@ -218,13 +228,7 @@ export class MeController {
 
 		await validateEntity(validatedAnswers);
 
-		await this.userRepository.save(
-			{
-				id: req.user.id,
-				personalizationAnswers: validatedAnswers,
-			},
-			{ transaction: false },
-		);
+		await this.personRepository.saveSurveyAnswers(req.user.id, validatedAnswers);
 
 		this.logger.info('User survey updated successfully', { userId: req.user.id });
 
@@ -238,22 +242,15 @@ export class MeController {
 
 	/**
 	 * Update the logged-in user's settings.
+	 * Note: This endpoint uses UserSelfSettingsUpdateRequestDto which excludes admin-only
+	 * fields like allowSSOManualLogin to prevent privilege escalation attacks (SSO bypass).
 	 */
 	@Patch('/settings')
 	async updateCurrentUserSettings(
 		req: AuthenticatedRequest,
 		_: Response,
-		@Body payload: SettingsUpdateRequestDto,
+		@Body payload: UserSelfSettingsUpdateRequestDto,
 	): Promise<User['settings']> {
-		const { id } = req.user;
-
-		await this.userService.updateSettings(id, payload);
-
-		const user = await this.userRepository.findOneOrFail({
-			select: ['settings'],
-			where: { id },
-		});
-
-		return user.settings;
+		return await this.userService.updateSettings(req.user.id, payload);
 	}
 }

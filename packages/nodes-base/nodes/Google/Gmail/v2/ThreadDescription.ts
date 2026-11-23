@@ -1,5 +1,7 @@
 import type { INodeProperties } from 'n8n-workflow';
 
+import { simplifyMemoryNotice, threadSimplifyOutputShapeHint } from '../utils/descriptions';
+
 export const threadOperations: INodeProperties[] = [
 	{
 		displayName: 'Operation',
@@ -205,6 +207,23 @@ export const threadFields: INodeProperties[] = [
 				type: 'boolean',
 				default: false,
 				description: 'Whether to reply to the sender only or to the entire list of recipients',
+				displayOptions: {
+					hide: {
+						replyToRecipientsOnly: [true],
+					},
+				},
+			},
+			{
+				displayName: 'Reply to Recipients Only',
+				name: 'replyToRecipientsOnly',
+				type: 'boolean',
+				default: false,
+				description: 'Whether to exclude the sender from the reply',
+				displayOptions: {
+					hide: {
+						replyToSenderOnly: [true],
+					},
+				},
 			},
 		],
 	},
@@ -223,7 +242,13 @@ export const threadFields: INodeProperties[] = [
 		},
 		default: true,
 		description: 'Whether to return a simplified version of the response instead of the raw data',
+		builderHint: {
+			propertyHint: threadSimplifyOutputShapeHint,
+		},
 	},
+	simplifyMemoryNotice({
+		displayOptions: { show: { operation: ['get'], resource: ['thread'], simple: [false] } },
+	}),
 	{
 		displayName: 'Options',
 		name: 'options',

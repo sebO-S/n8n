@@ -1,9 +1,6 @@
 {
     "type": "object",
     "properties": {
-        "@odata.etag": {
-            "type": "string"
-        },
         "attendees": {
             "type": "array",
             "items": {
@@ -54,6 +51,9 @@
         "id": {
             "type": "string"
         },
+        "isCancelled": {
+            "type": "boolean"
+        },
         "organizer": {
             "type": "object",
             "properties": {
@@ -81,9 +81,12 @@
                 }
             }
         },
+        "subject": {
+            "type": "string"
+        },
         "webLink": {
             "type": "string"
         }
     },
-    "version": 3
+    "version": 5
 }

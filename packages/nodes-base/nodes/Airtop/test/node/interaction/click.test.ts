@@ -1,3 +1,4 @@
+import { requestPath } from 'n8n-workflow';
 import nock from 'nock';
 
 import * as click from '../../../actions/interaction/click.operation';
@@ -11,6 +12,7 @@ const baseNodeParameters = {
 	sessionId: 'test-session-123',
 	windowId: 'win-123',
 	elementDescription: 'the login button',
+	clickType: 'click',
 	additionalFields: {},
 };
 
@@ -19,11 +21,11 @@ const mockResponse = {
 	message: 'Click executed successfully',
 };
 
-jest.mock('../../../transport', () => {
-	const originalModule = jest.requireActual<typeof transport>('../../../transport');
+vi.mock('../../../transport', async () => {
+	const originalModule = await vi.importActual<typeof transport>('../../../transport');
 	return {
 		...originalModule,
-		apiRequest: jest.fn(async function () {
+		apiRequest: vi.fn(async function () {
 			return {
 				status: 'success',
 				data: mockResponse,
@@ -39,11 +41,10 @@ describe('Test Airtop, click operation', () => {
 
 	afterAll(() => {
 		nock.restore();
-		jest.unmock('../../../transport');
 	});
 
 	afterEach(() => {
-		jest.clearAllMocks();
+		vi.clearAllMocks();
 	});
 
 	it('should execute click with minimal parameters', async () => {
@@ -52,10 +53,12 @@ describe('Test Airtop, click operation', () => {
 		expect(transport.apiRequest).toHaveBeenCalledTimes(1);
 		expect(transport.apiRequest).toHaveBeenCalledWith(
 			'POST',
-			'/sessions/test-session-123/windows/win-123/click',
+			requestPath`/sessions/test-session-123/windows/win-123/click`,
 			{
 				elementDescription: 'the login button',
-				configuration: {},
+				configuration: {
+					clickType: 'click',
+				},
 			},
 		);
 
@@ -98,12 +101,13 @@ describe('Test Airtop, click operation', () => {
 
 		expect(transport.apiRequest).toHaveBeenCalledWith(
 			'POST',
-			'/sessions/test-session-123/windows/win-123/click',
+			requestPath`/sessions/test-session-123/windows/win-123/click`,
 			{
 				configuration: {
 					visualAnalysis: {
 						scope: 'viewport',
 					},
+					clickType: 'click',
 				},
 				elementDescription: 'the login button',
 			},
@@ -122,15 +126,56 @@ describe('Test Airtop, click operation', () => {
 
 		expect(transport.apiRequest).toHaveBeenCalledWith(
 			'POST',
-			'/sessions/test-session-123/windows/win-123/click',
+			requestPath`/sessions/test-session-123/windows/win-123/click`,
 			{
 				configuration: {
+					clickType: 'click',
 					waitForNavigationConfig: {
 						waitUntil: 'load',
 					},
 				},
 				waitForNavigation: true,
 				elementDescription: 'the login button',
+			},
+		);
+	});
+
+	it("should execute double click when 'clickType' is 'doubleClick'", async () => {
+		const nodeParameters = {
+			...baseNodeParameters,
+			clickType: 'doubleClick',
+		};
+
+		await click.execute.call(createMockExecuteFunction(nodeParameters), 0);
+
+		expect(transport.apiRequest).toHaveBeenCalledWith(
+			'POST',
+			requestPath`/sessions/test-session-123/windows/win-123/click`,
+			{
+				elementDescription: 'the login button',
+				configuration: {
+					clickType: 'doubleClick',
+				},
+			},
+		);
+	});
+
+	it("should execute right click when 'clickType' is 'rightClick'", async () => {
+		const nodeParameters = {
+			...baseNodeParameters,
+			clickType: 'rightClick',
+		};
+
+		await click.execute.call(createMockExecuteFunction(nodeParameters), 0);
+
+		expect(transport.apiRequest).toHaveBeenCalledWith(
+			'POST',
+			requestPath`/sessions/test-session-123/windows/win-123/click`,
+			{
+				elementDescription: 'the login button',
+				configuration: {
+					clickType: 'rightClick',
+				},
 			},
 		);
 	});

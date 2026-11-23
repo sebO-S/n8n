@@ -2,14 +2,17 @@ import get from 'lodash/get';
 import set from 'lodash/set';
 import unset from 'lodash/unset';
 import {
-	ApplicationError,
 	NodeOperationError,
 	deepCopy,
 	getValueDescription,
 	jsonParse,
 	validateFieldType,
+	isBinaryValue,
+	BINARY_MODE_COMBINED,
 } from 'n8n-workflow';
+import { UserError } from '@n8n/errors';
 import type {
+	AssignmentCollectionValue,
 	FieldType,
 	IDataObject,
 	IExecuteFunctions,
@@ -20,7 +23,7 @@ import type {
 
 import type { SetNodeOptions } from './interfaces';
 import { INCLUDE } from './interfaces';
-import { getResolvables, sanitizeDataPathKey } from '../../../../utils/utilities';
+import { resolveExpressions, sanitizeDataPathKey } from '../../../../utils/utilities';
 
 const configureFieldHelper = (dotNotation?: boolean) => {
 	if (dotNotation !== false) {
@@ -112,7 +115,7 @@ export function composeReturnItem(
 		case INCLUDE.NONE:
 			break;
 		default:
-			throw new ApplicationError(`The include option "${options.include}" is not known!`, {
+			throw new UserError(`The include option "${options.include}" is not known!`, {
 				level: 'warning',
 			});
 	}
@@ -135,23 +138,11 @@ export const parseJsonParameter = (
 
 	if (typeof jsonData === 'string') {
 		try {
-			returnData = jsonParse<IDataObject>(jsonData);
+			returnData = jsonParse<IDataObject>(jsonData, { repairJSON: true });
 		} catch (error) {
-			let recoveredData = '';
-			try {
-				recoveredData = jsonData
-					.replace(/'/g, '"') // Replace single quotes with double quotes
-					.replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":') // Wrap keys in double quotes
-					.replace(/,\s*([\]}])/g, '$1') // Remove trailing commas from objects
-					.replace(/,+$/, ''); // Remove trailing comma
-				returnData = jsonParse<IDataObject>(recoveredData);
-			} catch (err) {
-				const description =
-					recoveredData === jsonData ? jsonData : `${recoveredData};\n Original input: ${jsonData}`;
-				throw new NodeOperationError(node, `The ${location} in item ${i} contains invalid JSON`, {
-					description,
-				});
-			}
+			throw new NodeOperationError(node, `The ${location} in item ${i} contains invalid JSON`, {
+				description: jsonData,
+			});
 		}
 	} else {
 		returnData = jsonData;
@@ -214,9 +205,17 @@ export const validateEntry = (
 		}
 	}
 
+	const newValue = validationResult.newValue;
+
+	// v3.5+ serializes values to JSON-safe form so output never carries live
+	// Luxon DateTime objects (dateTime fields) or nested dates inside objects/arrays
+	if (nodeVersion && nodeVersion >= 3.5 && newValue !== undefined && newValue !== null) {
+		return { name, value: deepCopy(newValue) };
+	}
+
 	return {
 		name,
-		value: validationResult.newValue ?? null,
+		value: newValue ?? null,
 	};
 };
 
@@ -225,19 +224,101 @@ export function resolveRawData(
 	rawData: string,
 	i: number,
 ) {
-	const resolvables = getResolvables(rawData);
-	let returnData: string = rawData;
+	// Existing workflows expect each expression to be replaced in turn, with `$` kept literal.
+	// Doubling `$` makes the legacy String.replace insert the value literally.
+	return resolveExpressions(
+		rawData,
+		(resolvable) => {
+			const resolvedValue = this.evaluateExpression(resolvable, i);
+			const value =
+				typeof resolvedValue === 'object' && resolvedValue !== null
+					? JSON.stringify(resolvedValue)
+					: String(resolvedValue);
+			return value.replaceAll('$', '$$$$');
+		},
+		{ legacy: true },
+	);
+}
 
-	if (resolvables.length) {
-		for (const resolvable of resolvables) {
-			const resolvedValue = this.evaluateExpression(`${resolvable}`, i);
+export function prepareReturnItem(
+	context: IExecuteFunctions | ISupplyDataFunctions,
+	value: AssignmentCollectionValue,
+	itemIndex: number,
+	item: INodeExecutionData,
+	node: INode,
+	options: SetNodeOptions,
+) {
+	const jsonValues: AssignmentCollectionValue['assignments'] = [];
+	const binaryValues: AssignmentCollectionValue['assignments'] = [];
 
-			if (typeof resolvedValue === 'object' && resolvedValue !== null) {
-				returnData = returnData.replace(resolvable, JSON.stringify(resolvedValue));
-			} else {
-				returnData = returnData.replace(resolvable, resolvedValue as string);
-			}
+	for (const assignment of value?.assignments ?? []) {
+		if (assignment.type === 'binary') {
+			binaryValues.push(assignment);
+		} else {
+			jsonValues.push(assignment);
 		}
 	}
-	return returnData;
+
+	const newData = Object.fromEntries(
+		jsonValues.map((assignment) => {
+			const { name, value } = validateEntry(
+				assignment.name,
+				assignment.type as FieldType,
+				assignment.value,
+				node,
+				itemIndex,
+				options.ignoreConversionErrors,
+				node.typeVersion,
+			);
+
+			return [name, value];
+		}),
+	);
+
+	const returnItem = composeReturnItem.call(
+		context,
+		itemIndex,
+		item,
+		newData,
+		options,
+		node.typeVersion,
+	);
+
+	if (binaryValues.length) {
+		if (!returnItem.binary) {
+			returnItem.binary = {};
+		}
+		const { binaryMode } = context.getWorkflowSettings();
+
+		const target = binaryMode === BINARY_MODE_COMBINED ? 'json' : 'binary';
+
+		const fieldHelper = configureFieldHelper(options.dotNotation);
+
+		for (const assignment of binaryValues) {
+			const name = assignment.name;
+			const value = assignment.value as string;
+			const binaryData = context.helpers.assertBinaryData(itemIndex, value);
+			if (!isBinaryValue(binaryData)) {
+				throw new NodeOperationError(
+					node,
+					`Could not find binary data specified in field ${name}`,
+					{ itemIndex },
+				);
+			}
+			// Do not push binary data to json if entry contains raw data
+			if (target === 'json' && !binaryData.id) {
+				returnItem.binary[name] = binaryData;
+				continue;
+			}
+
+			if (target === 'json') {
+				fieldHelper.set(returnItem.json, name, binaryData);
+				continue;
+			}
+
+			returnItem[target]![name] = binaryData;
+		}
+	}
+
+	return returnItem;
 }

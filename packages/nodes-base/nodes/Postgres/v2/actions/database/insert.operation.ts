@@ -1,12 +1,16 @@
 import {
+	NodeOperationError,
 	type IDataObject,
 	type IExecuteFunctions,
 	type INodeExecutionData,
 	type INodeProperties,
 } from 'n8n-workflow';
 
-import { updateDisplayOptions } from '@utils/utilities';
+import { createEventLoopYielder } from '@n8n/utils/promise/create-event-loop-yielder';
 
+import { generatePairedItemData, updateDisplayOptions } from '@utils/utilities';
+
+import { copyRows, type CopyRow } from '../../helpers/copy';
 import type {
 	PgpClient,
 	PgpDatabase,
@@ -25,6 +29,7 @@ import {
 	replaceEmptyStringsByNulls,
 	hasJsonDataTypeInSchema,
 	convertValuesToJsonWithPgp,
+	runQueriesAndHandleErrors,
 } from '../../helpers/utils';
 import { optionsCollection } from '../common.descriptions';
 
@@ -180,75 +185,132 @@ export async function execute(
 
 	let tableSchema = await getTableSchema(db, schema, table);
 
+	const useCopy = nodeOptions.useCopy === true;
+	const rowsToCopy: CopyRow[] = [];
 	const queries: QueryWithValues[] = [];
-
+	const errorItemsMap = new Map<number, INodeExecutionData>();
+	const yieldToEventLoop = createEventLoopYielder();
 	for (let i = 0; i < items.length; i++) {
-		schema = this.getNodeParameter('schema', i, undefined, {
-			extractValue: true,
-		}) as string;
+		await yieldToEventLoop();
+		try {
+			schema = this.getNodeParameter('schema', i, undefined, {
+				extractValue: true,
+			}) as string;
 
-		table = this.getNodeParameter('table', i, undefined, {
-			extractValue: true,
-		}) as string;
+			table = this.getNodeParameter('table', i, undefined, {
+				extractValue: true,
+			}) as string;
 
-		const options = this.getNodeParameter('options', i, {});
+			const options = this.getNodeParameter('options', i, {});
 
-		let onConflict = '';
-		if (options.skipOnConflict) {
-			onConflict = ' ON CONFLICT DO NOTHING';
-		}
+			let onConflict = '';
+			if (options.skipOnConflict) {
+				onConflict = ' ON CONFLICT DO NOTHING';
+			}
 
-		let query = `INSERT INTO $1:name.$2:name($3:name) VALUES($3:csv)${onConflict}`;
-		let values: QueryValues = [schema, table];
+			let query = `INSERT INTO $1:name.$2:name($3:name) VALUES($3:csv)${onConflict}`;
+			let values: QueryValues = [schema, table];
 
-		const dataMode =
-			nodeVersion < 2.2
-				? (this.getNodeParameter('dataMode', i) as string)
-				: (this.getNodeParameter('columns.mappingMode', i) as string);
-
-		let item: IDataObject = {};
-
-		if (dataMode === 'autoMapInputData') {
-			item = items[i].json;
-		}
-
-		if (dataMode === 'defineBelow') {
-			const valuesToSend =
+			const dataMode =
 				nodeVersion < 2.2
-					? ((this.getNodeParameter('valuesToSend', i, []) as IDataObject).values as IDataObject[])
-					: ((this.getNodeParameter('columns.values', i, []) as IDataObject)
-							.values as IDataObject[]);
+					? (this.getNodeParameter('dataMode', i) as string)
+					: (this.getNodeParameter('columns.mappingMode', i) as string);
 
-			item =
-				nodeVersion < 2.2
-					? prepareItem(valuesToSend)
-					: hasJsonDataTypeInSchema(tableSchema)
-						? convertValuesToJsonWithPgp(
-								pgp,
-								tableSchema,
-								(this.getNodeParameter('columns', i) as IDataObject)?.value as IDataObject,
-							)
-						: (this.getNodeParameter('columns.value', i) as IDataObject);
+			let item: IDataObject = {};
+
+			if (dataMode === 'autoMapInputData') {
+				item = items[i].json;
+			}
+
+			if (dataMode === 'defineBelow') {
+				const valuesToSend =
+					nodeVersion < 2.2
+						? ((this.getNodeParameter('valuesToSend', i, []) as IDataObject)
+								.values as IDataObject[])
+						: ((this.getNodeParameter('columns.values', i, []) as IDataObject)
+								.values as IDataObject[]);
+
+				item =
+					nodeVersion < 2.2
+						? prepareItem(valuesToSend)
+						: hasJsonDataTypeInSchema(tableSchema)
+							? convertValuesToJsonWithPgp(
+									pgp,
+									tableSchema,
+									(this.getNodeParameter('columns', i) as IDataObject)?.value as IDataObject,
+								)
+							: (this.getNodeParameter('columns.value', i) as IDataObject);
+			}
+
+			tableSchema = await updateTableSchema(db, tableSchema, schema, table);
+
+			if (nodeVersion >= 2.4 || useCopy) {
+				item = convertArraysToPostgresFormat(item, tableSchema, this.getNode(), i);
+			}
+
+			checkItemAgainstSchema(this.getNode(), item, tableSchema, i);
+
+			if (useCopy) {
+				if (Object.keys(item).length === 0) {
+					throw new NodeOperationError(
+						this.getNode(),
+						'Load Rows With COPY needs at least one column value in each item',
+						{ itemIndex: i },
+					);
+				}
+				rowsToCopy.push({ itemIndex: i, schema, table, item });
+				continue;
+			}
+
+			values.push(item);
+
+			const outputColumns = this.getNodeParameter('options.outputColumns', i, ['*']) as string[];
+
+			if (nodeVersion >= 2.6 && Object.keys(item).length === 0) {
+				query = 'INSERT INTO $1:name.$2:name DEFAULT VALUES';
+			}
+
+			[query, values] = addReturning(query, outputColumns, values);
+
+			queries.push({ query, values });
+		} catch (e) {
+			if (this.continueOnFail()) {
+				const error = e instanceof Error ? e : String(e);
+				errorItemsMap.set(i, { json: { error }, pairedItem: { item: i } });
+				continue;
+			}
+
+			throw e;
 		}
-
-		tableSchema = await updateTableSchema(db, tableSchema, schema, table);
-
-		if (nodeVersion >= 2.4) {
-			convertArraysToPostgresFormat(item, tableSchema, this.getNode(), i);
-		}
-
-		values.push(checkItemAgainstSchema(this.getNode(), item, tableSchema, i));
-
-		const outputColumns = this.getNodeParameter('options.outputColumns', i, ['*']) as string[];
-
-		if (nodeVersion >= 2.6 && Object.keys(item).length === 0) {
-			query = 'INSERT INTO $1:name.$2:name DEFAULT VALUES';
-		}
-
-		[query, values] = addReturning(query, outputColumns, values);
-
-		queries.push({ query, values });
 	}
 
-	return await runQueries(queries, items, nodeOptions);
+	if (useCopy) {
+		return await insertWithCopy.call(this, items, rowsToCopy, errorItemsMap, db, pgp);
+	}
+
+	return await runQueriesAndHandleErrors(runQueries, queries, nodeOptions, errorItemsMap);
+}
+
+async function insertWithCopy(
+	this: IExecuteFunctions,
+	items: INodeExecutionData[],
+	rowsToCopy: CopyRow[],
+	errorItemsMap: Map<number, INodeExecutionData>,
+	db: PgpDatabase,
+	pgp: PgpClient,
+): Promise<INodeExecutionData[]> {
+	// COPY loads all rows or none
+	if (errorItemsMap.size > 0) return Array.from(errorItemsMap.values());
+
+	const allItems = generatePairedItemData(items.length);
+
+	try {
+		const rows = await copyRows(this.getNode(), db, pgp, rowsToCopy);
+		return [{ json: { rows }, pairedItem: allItems }];
+	} catch (error) {
+		if (!this.continueOnFail() || !(error instanceof NodeOperationError)) throw error;
+		const { itemIndex } = error.context;
+		const pairedItem = typeof itemIndex === 'number' ? { item: itemIndex } : allItems;
+		return [{ json: { error: { ...error, message: error.message } }, pairedItem }];
+	}
 }

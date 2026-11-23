@@ -4,6 +4,9 @@
         "$approval": {
             "type": "object",
             "properties": {
+                "add_approver": {
+                    "type": "boolean"
+                },
                 "approve": {
                     "type": "boolean"
                 },
@@ -79,7 +82,24 @@
         "$state": {
             "type": "string"
         },
+        "$zia_owner_assignment": {
+            "type": "string"
+        },
         "Account_Name": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "Campaign_Source": {
+            "type": "null"
+        },
+        "Contact_Name": {
             "type": "object",
             "properties": {
                 "id": {
@@ -133,6 +153,9 @@
         "Modified_Time": {
             "type": "string"
         },
+        "Overall_Sales_Duration": {
+            "type": "integer"
+        },
         "Owner": {
             "type": "object",
             "properties": {
@@ -150,20 +173,15 @@
         "Probability": {
             "type": "integer"
         },
-        "Tag": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string"
-                    },
-                    "name": {
-                        "type": "string"
-                    }
-                }
-            }
+        "Reason_For_Loss__s": {
+            "type": "null"
+        },
+        "Sales_Cycle_Duration": {
+            "type": "integer"
+        },
+        "Stage": {
+            "type": "string"
         }
     },
-    "version": 2
+    "version": 6
 }

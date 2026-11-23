@@ -1,13 +1,13 @@
 import { defineConfig, globalIgnores } from 'eslint/config';
-import { nodeConfig } from '@n8n/eslint-config/node';
+import { backendConfig } from '@n8n/eslint-config/backend';
 
 export default defineConfig(
 	globalIgnores(['src/template/templates/**/template', 'src/template/templates/shared']),
-	nodeConfig,
+	backendConfig,
 	{
-		ignores: ['**/*.test.ts'],
+		files: ['**/*.test.ts', 'src/test-utils/**/*'],
 		rules: {
-			'import-x/no-extraneous-dependencies': ['error', { devDependencies: false }],
+			'import-x/no-extraneous-dependencies': ['error', { devDependencies: true }],
 		},
 	},
 	{

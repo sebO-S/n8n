@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import AssistantIcon from '../AskAssistantIcon/AssistantIcon.vue';
+import N8nIcon from '../N8nIcon';
 
 withDefaults(defineProps<{ size?: 'small' | 'mini' }>(), {
 	size: 'small',
@@ -8,13 +8,13 @@ withDefaults(defineProps<{ size?: 'small' | 'mini' }>(), {
 
 <template>
 	<div :class="[$style.container, $style[size]]">
-		<AssistantIcon :size="size" theme="blank" />
+		<N8nIcon icon="n8n-assistant" :size="size === 'mini' ? 8 : 10" color="--color--neutral-white" />
 	</div>
 </template>
 
 <style lang="scss" module>
 .container {
-	background: var(--color-assistant-highlight-gradient);
+	background: var(--assistant--color--highlight-gradient);
 	border-radius: 50%;
 	display: inline-flex;
 	align-items: center;
@@ -22,12 +22,12 @@ withDefaults(defineProps<{ size?: 'small' | 'mini' }>(), {
 }
 
 .small {
-	height: var(--spacing-m);
-	width: var(--spacing-m);
+	height: var(--spacing--md);
+	width: var(--spacing--md);
 }
 
 .mini {
-	height: var(--spacing-s);
-	width: var(--spacing-s);
+	height: var(--spacing--sm);
+	width: var(--spacing--sm);
 }
 </style>

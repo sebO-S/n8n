@@ -1,22 +1,25 @@
 import { Container } from '@n8n/di';
-import { mock, type MockProxy } from 'jest-mock-extended';
 import { BinaryDataService } from 'n8n-core';
 import type { ITaskData, INodeExecutionData, IBinaryData } from 'n8n-workflow';
-import { BINARY_ENCODING, OperationalError } from 'n8n-workflow';
+import { BINARY_ENCODING } from 'n8n-workflow';
+import { OperationalError } from '@n8n/errors';
 import assert from 'node:assert';
 import { Readable } from 'node:stream';
+import { mock, type MockProxy } from 'vitest-mock-extended';
 
 import { extractWebhookLastNodeResponse } from '../webhook-last-node-response-extractor';
 
-import type { WebhookExecutionContext } from '@/webhooks/webhook-execution-context';
-
 describe('extractWebhookLastNodeResponse', () => {
-	let context: MockProxy<WebhookExecutionContext>;
 	let lastNodeTaskData: MockProxy<ITaskData>;
 	let binaryDataService: MockProxy<BinaryDataService>;
 
+	const defaultOptions = {
+		responsePropertyName: undefined,
+		responseContentType: undefined,
+		responseBinaryPropertyName: undefined,
+	} as const;
+
 	beforeEach(() => {
-		context = mock<WebhookExecutionContext>();
 		lastNodeTaskData = mock<ITaskData>();
 		binaryDataService = mock<BinaryDataService>();
 
@@ -24,7 +27,7 @@ describe('extractWebhookLastNodeResponse', () => {
 	});
 
 	afterEach(() => {
-		jest.clearAllMocks();
+		vi.clearAllMocks();
 	});
 
 	describe('responseDataType: firstEntryJson', () => {
@@ -35,9 +38,10 @@ describe('extractWebhookLastNodeResponse', () => {
 			};
 
 			const result = await extractWebhookLastNodeResponse(
-				context,
 				'firstEntryJson',
 				lastNodeTaskData,
+				false,
+				defaultOptions,
 			);
 
 			expect(result).toEqual({
@@ -56,9 +60,10 @@ describe('extractWebhookLastNodeResponse', () => {
 			};
 
 			const result = await extractWebhookLastNodeResponse(
-				context,
 				'firstEntryJson',
 				lastNodeTaskData,
+				false,
+				defaultOptions,
 			);
 
 			assert(!result.ok);
@@ -71,14 +76,15 @@ describe('extractWebhookLastNodeResponse', () => {
 				main: [[{ json: jsonData }]],
 			};
 
-			context.evaluateSimpleWebhookDescriptionExpression
-				.mockReturnValueOnce('nested.value')
-				.mockReturnValueOnce(undefined);
-
 			const result = await extractWebhookLastNodeResponse(
-				context,
 				'firstEntryJson',
 				lastNodeTaskData,
+				false,
+				{
+					responsePropertyName: 'nested.value',
+					responseContentType: undefined,
+					responseBinaryPropertyName: undefined,
+				},
 			);
 
 			expect(result).toEqual({
@@ -97,14 +103,15 @@ describe('extractWebhookLastNodeResponse', () => {
 				main: [[{ json: jsonData }]],
 			};
 
-			context.evaluateSimpleWebhookDescriptionExpression
-				.mockReturnValueOnce(undefined)
-				.mockReturnValueOnce('application/xml');
-
 			const result = await extractWebhookLastNodeResponse(
-				context,
 				'firstEntryJson',
 				lastNodeTaskData,
+				false,
+				{
+					responsePropertyName: undefined,
+					responseContentType: 'application/xml',
+					responseBinaryPropertyName: undefined,
+				},
 			);
 
 			expect(result).toEqual({
@@ -115,6 +122,70 @@ describe('extractWebhookLastNodeResponse', () => {
 					contentType: 'application/xml',
 				},
 			});
+		});
+
+		it('should return error when second branch has data but first is empty (default behavior)', async () => {
+			const jsonData = { foo: 'bar', fromSecondBranch: true };
+			lastNodeTaskData.data = {
+				main: [
+					[], // First branch is empty
+					[{ json: jsonData }], // Second branch has data
+				],
+			};
+
+			const result = await extractWebhookLastNodeResponse(
+				'firstEntryJson',
+				lastNodeTaskData,
+				false,
+				defaultOptions,
+			);
+
+			assert(!result.ok);
+			expect(result.error).toBeInstanceOf(OperationalError);
+			expect(result.error.message).toBe('No item to return was found');
+		});
+
+		it('should return data from second branch when first is empty and checkAllMainOutputs is true', async () => {
+			const jsonData = { foo: 'bar', fromSecondBranch: true };
+			lastNodeTaskData.data = {
+				main: [
+					[], // First branch is empty
+					[{ json: jsonData }], // Second branch has data
+				],
+			};
+
+			const result = await extractWebhookLastNodeResponse(
+				'firstEntryJson',
+				lastNodeTaskData,
+				true, // checkAllMainOutputs = true
+				defaultOptions,
+			);
+
+			expect(result).toEqual({
+				ok: true,
+				result: {
+					type: 'static',
+					body: jsonData,
+					contentType: undefined,
+				},
+			});
+		});
+
+		it('should return error when all branches are empty', async () => {
+			lastNodeTaskData.data = {
+				main: [[], [], []],
+			};
+
+			const result = await extractWebhookLastNodeResponse(
+				'firstEntryJson',
+				lastNodeTaskData,
+				false,
+				defaultOptions,
+			);
+
+			assert(!result.ok);
+			expect(result.error).toBeInstanceOf(OperationalError);
+			expect(result.error.message).toBe('No item to return was found');
 		});
 	});
 
@@ -132,12 +203,15 @@ describe('extractWebhookLastNodeResponse', () => {
 				main: [[nodeExecutionData]],
 			};
 
-			context.evaluateSimpleWebhookDescriptionExpression.mockReturnValue('data');
-
 			const result = await extractWebhookLastNodeResponse(
-				context,
 				'firstEntryBinary',
 				lastNodeTaskData,
+				false,
+				{
+					responsePropertyName: undefined,
+					responseContentType: undefined,
+					responseBinaryPropertyName: 'data',
+				},
 			);
 
 			expect(result).toEqual({
@@ -167,12 +241,15 @@ describe('extractWebhookLastNodeResponse', () => {
 				main: [[nodeExecutionData]],
 			};
 
-			context.evaluateSimpleWebhookDescriptionExpression.mockReturnValue('data');
-
 			const result = await extractWebhookLastNodeResponse(
-				context,
 				'firstEntryBinary',
 				lastNodeTaskData,
+				false,
+				{
+					responsePropertyName: undefined,
+					responseContentType: undefined,
+					responseBinaryPropertyName: 'data',
+				},
 			);
 
 			expect(result).toEqual({
@@ -192,9 +269,10 @@ describe('extractWebhookLastNodeResponse', () => {
 			};
 
 			const result = await extractWebhookLastNodeResponse(
-				context,
 				'firstEntryBinary',
 				lastNodeTaskData,
+				false,
+				defaultOptions,
 			);
 
 			assert(!result.ok);
@@ -211,9 +289,10 @@ describe('extractWebhookLastNodeResponse', () => {
 			};
 
 			const result = await extractWebhookLastNodeResponse(
-				context,
 				'firstEntryBinary',
 				lastNodeTaskData,
+				false,
+				defaultOptions,
 			);
 
 			assert(!result.ok);
@@ -230,12 +309,15 @@ describe('extractWebhookLastNodeResponse', () => {
 				main: [[nodeExecutionData]],
 			};
 
-			context.evaluateSimpleWebhookDescriptionExpression.mockReturnValue(undefined);
-
 			const result = await extractWebhookLastNodeResponse(
-				context,
 				'firstEntryBinary',
 				lastNodeTaskData,
+				false,
+				{
+					responsePropertyName: undefined,
+					responseContentType: undefined,
+					responseBinaryPropertyName: undefined,
+				},
 			);
 
 			assert(!result.ok);
@@ -252,12 +334,15 @@ describe('extractWebhookLastNodeResponse', () => {
 				main: [[nodeExecutionData]],
 			};
 
-			context.evaluateSimpleWebhookDescriptionExpression.mockReturnValue(123);
-
 			const result = await extractWebhookLastNodeResponse(
-				context,
 				'firstEntryBinary',
 				lastNodeTaskData,
+				false,
+				{
+					responsePropertyName: undefined,
+					responseContentType: undefined,
+					responseBinaryPropertyName: 123,
+				},
 			);
 
 			assert(!result.ok);
@@ -274,12 +359,15 @@ describe('extractWebhookLastNodeResponse', () => {
 				main: [[nodeExecutionData]],
 			};
 
-			context.evaluateSimpleWebhookDescriptionExpression.mockReturnValue('nonExistentProperty');
-
 			const result = await extractWebhookLastNodeResponse(
-				context,
 				'firstEntryBinary',
 				lastNodeTaskData,
+				false,
+				{
+					responsePropertyName: undefined,
+					responseContentType: undefined,
+					responseBinaryPropertyName: 'nonExistentProperty',
+				},
 			);
 
 			assert(!result.ok);
@@ -288,11 +376,102 @@ describe('extractWebhookLastNodeResponse', () => {
 				"The binary property 'nonExistentProperty' which should be returned does not exist",
 			);
 		});
+
+		it('should return error when second branch has binary but first is empty (default behavior)', async () => {
+			const binaryData: IBinaryData = {
+				data: Buffer.from('binary from second branch').toString(BINARY_ENCODING),
+				mimeType: 'text/plain',
+			};
+			const nodeExecutionData: INodeExecutionData = {
+				json: {},
+				binary: { data: binaryData },
+			};
+			lastNodeTaskData.data = {
+				main: [
+					[], // First branch is empty
+					[nodeExecutionData], // Second branch has binary data
+				],
+			};
+
+			const result = await extractWebhookLastNodeResponse(
+				'firstEntryBinary',
+				lastNodeTaskData,
+				false,
+				{
+					responsePropertyName: undefined,
+					responseContentType: undefined,
+					responseBinaryPropertyName: 'data',
+				},
+			);
+
+			assert(!result.ok);
+			expect(result.error).toBeInstanceOf(OperationalError);
+			expect(result.error.message).toBe('No item was found to return');
+		});
+
+		it('should return binary from second branch when first is empty and checkAllMainOutputs is true', async () => {
+			const binaryData: IBinaryData = {
+				data: Buffer.from('binary from second branch').toString(BINARY_ENCODING),
+				mimeType: 'text/plain',
+			};
+			const nodeExecutionData: INodeExecutionData = {
+				json: {},
+				binary: { data: binaryData },
+			};
+			lastNodeTaskData.data = {
+				main: [
+					[], // First branch is empty
+					[nodeExecutionData], // Second branch has binary data
+				],
+			};
+
+			const result = await extractWebhookLastNodeResponse(
+				'firstEntryBinary',
+				lastNodeTaskData,
+				true, // checkAllMainOutputs = true
+				{
+					responsePropertyName: undefined,
+					responseContentType: undefined,
+					responseBinaryPropertyName: 'data',
+				},
+			);
+
+			expect(result).toEqual({
+				ok: true,
+				result: {
+					type: 'static',
+					body: Buffer.from('binary from second branch'),
+					contentType: 'text/plain',
+				},
+			});
+		});
+
+		it('should return error when all branches are empty for binary', async () => {
+			lastNodeTaskData.data = {
+				main: [[], [], []],
+			};
+
+			const result = await extractWebhookLastNodeResponse(
+				'firstEntryBinary',
+				lastNodeTaskData,
+				false,
+				defaultOptions,
+			);
+
+			assert(!result.ok);
+			expect(result.error).toBeInstanceOf(OperationalError);
+			expect(result.error.message).toBe('No item was found to return');
+		});
 	});
 
 	describe('responseDataType: noData', () => {
 		it('should return undefined body and contentType', async () => {
-			const result = await extractWebhookLastNodeResponse(context, 'noData', lastNodeTaskData);
+			const result = await extractWebhookLastNodeResponse(
+				'noData',
+				lastNodeTaskData,
+				false,
+				defaultOptions,
+			);
 
 			expect(result).toEqual({
 				ok: true,
@@ -314,7 +493,12 @@ describe('extractWebhookLastNodeResponse', () => {
 				main: [[{ json: jsonData1 }, { json: jsonData2 }, { json: jsonData3 }]],
 			};
 
-			const result = await extractWebhookLastNodeResponse(context, 'allEntries', lastNodeTaskData);
+			const result = await extractWebhookLastNodeResponse(
+				'allEntries',
+				lastNodeTaskData,
+				false,
+				defaultOptions,
+			);
 
 			expect(result).toEqual({
 				ok: true,
@@ -331,7 +515,119 @@ describe('extractWebhookLastNodeResponse', () => {
 				main: [[]],
 			};
 
-			const result = await extractWebhookLastNodeResponse(context, 'allEntries', lastNodeTaskData);
+			const result = await extractWebhookLastNodeResponse(
+				'allEntries',
+				lastNodeTaskData,
+				false,
+				defaultOptions,
+			);
+
+			expect(result).toEqual({
+				ok: true,
+				result: {
+					type: 'static',
+					body: [],
+					contentType: undefined,
+				},
+			});
+		});
+
+		it('should return empty array when second branch has data but first is empty (default behavior)', async () => {
+			const jsonData1 = { item: 1, fromSecondBranch: true };
+			const jsonData2 = { item: 2, fromSecondBranch: true };
+			const jsonData3 = { item: 3, fromSecondBranch: true };
+			lastNodeTaskData.data = {
+				main: [
+					[], // First branch is empty
+					[{ json: jsonData1 }, { json: jsonData2 }, { json: jsonData3 }], // Second branch has data
+				],
+			};
+
+			const result = await extractWebhookLastNodeResponse(
+				'allEntries',
+				lastNodeTaskData,
+				false,
+				defaultOptions,
+			);
+
+			expect(result).toEqual({
+				ok: true,
+				result: {
+					type: 'static',
+					body: [], // Old behavior: returns empty array when first branch is empty
+					contentType: undefined,
+				},
+			});
+		});
+
+		it('should return all entries from second branch when first is empty and checkAllMainOutputs is true', async () => {
+			const jsonData1 = { item: 1, fromSecondBranch: true };
+			const jsonData2 = { item: 2, fromSecondBranch: true };
+			const jsonData3 = { item: 3, fromSecondBranch: true };
+			lastNodeTaskData.data = {
+				main: [
+					[], // First branch is empty
+					[{ json: jsonData1 }, { json: jsonData2 }, { json: jsonData3 }], // Second branch has data
+				],
+			};
+
+			const result = await extractWebhookLastNodeResponse(
+				'allEntries',
+				lastNodeTaskData,
+				true, // checkAllMainOutputs = true
+				defaultOptions,
+			);
+
+			expect(result).toEqual({
+				ok: true,
+				result: {
+					type: 'static',
+					body: [jsonData1, jsonData2, jsonData3],
+					contentType: undefined,
+				},
+			});
+		});
+
+		it('should return entries from first branch only even when multiple branches have data', async () => {
+			const branch1Data = { item: 'from-first' };
+			const branch2Data = { item: 'from-second' };
+			const branch3Data = { item: 'from-third' };
+			lastNodeTaskData.data = {
+				main: [
+					[{ json: branch1Data }], // First branch has data - this should be used
+					[{ json: branch2Data }], // Second branch also has data - should be ignored
+					[{ json: branch3Data }], // Third branch also has data - should be ignored
+				],
+			};
+
+			const result = await extractWebhookLastNodeResponse(
+				'allEntries',
+				lastNodeTaskData,
+				false,
+				defaultOptions,
+			);
+
+			expect(result).toEqual({
+				ok: true,
+				result: {
+					type: 'static',
+					body: [branch1Data], // Only data from first branch
+					contentType: undefined,
+				},
+			});
+		});
+
+		it('should return empty array when all branches are empty', async () => {
+			lastNodeTaskData.data = {
+				main: [[], [], []],
+			};
+
+			const result = await extractWebhookLastNodeResponse(
+				'allEntries',
+				lastNodeTaskData,
+				false,
+				defaultOptions,
+			);
 
 			expect(result).toEqual({
 				ok: true,

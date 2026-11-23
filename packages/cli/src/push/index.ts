@@ -1,38 +1,38 @@
 import type { PushMessage } from '@n8n/api-types';
-import { inProduction, Logger } from '@n8n/backend-common';
+import { inProduction, Logger, TypedEmitter } from '@n8n/backend-common';
+import type { PushSender } from '@n8n/backend-services';
 import type { User } from '@n8n/db';
 import { OnPubSubEvent, OnShutdown } from '@n8n/decorators';
 import { Container, Service } from '@n8n/di';
+import { toMb } from '@n8n/utils/number/bytes';
 import type { Application } from 'express';
 import { ServerResponse } from 'http';
 import type { Server } from 'http';
 import pick from 'lodash/pick';
 import { InstanceSettings } from 'n8n-core';
-import { deepCopy } from 'n8n-workflow';
 import { parse as parseUrl } from 'url';
 import { Server as WSServer } from 'ws';
 
 import { AuthService } from '@/auth/auth.service';
-import { TRIMMED_TASK_DATA_CONNECTIONS } from '@/constants';
-import { BadRequestError } from '@/errors/response-errors/bad-request.error';
-import { Publisher } from '@/scaling/pubsub/publisher.service';
-import { TypedEmitter } from '@/typed-emitter';
+import { BadRequestError, InternalServerError } from '@n8n/errors';
+import { MAX_PUBSUB_PAYLOAD_BYTES, Publisher } from '@n8n/backend-services';
 
+import { validateSseOrigin, validateWebSocketOrigin } from './origin-validator';
+import { isPushResponse, isSSEPushRequest, isWebSocketPushRequest } from './push-helpers';
 import { PushConfig } from './push.config';
 import { SSEPush } from './sse.push';
-import type { OnPushMessage, PushResponse, SSEPushRequest, WebSocketPushRequest } from './types';
+import {
+	type OnPushMessage,
+	type PushResponse,
+	type SSEPushRequest,
+	type WebSocketPushRequest,
+} from './types';
 import { WebSocketPush } from './websocket.push';
 
 type PushEvents = {
 	editorUiConnected: string;
 	message: OnPushMessage;
 };
-
-/**
- * Max allowed size of a push message in bytes. Events going through the pubsub
- * channel are trimmed if exceeding this size.
- */
-const MAX_PAYLOAD_SIZE_BYTES = 5 * 1024 * 1024; // 5 MiB
 
 /**
  * Push service for uni- or bi-directional communication with frontend clients.
@@ -42,7 +42,7 @@ const MAX_PAYLOAD_SIZE_BYTES = 5 * 1024 * 1024; // 5 MiB
  * @emits message when a message is received from a client
  */
 @Service()
-export class Push extends TypedEmitter<PushEvents> {
+export class Push extends TypedEmitter<PushEvents> implements PushSender {
 	private useWebSockets = this.config.backend === 'websocket';
 
 	isBidirectional = this.useWebSockets;
@@ -95,9 +95,16 @@ export class Push extends TypedEmitter<PushEvents> {
 		app.use(
 			`/${restEndpoint}/push`,
 
-			this.authService.createAuthMiddleware(false),
-			(req: SSEPushRequest | WebSocketPushRequest, res: PushResponse) =>
-				this.handleRequest(req, res),
+			this.authService.createAuthMiddleware({ allowSkipMFA: false }),
+			(req, res) => {
+				if (!isWebSocketPushRequest(req) && !isSSEPushRequest(req)) {
+					throw new BadRequestError('Request is not a PushRequest');
+				}
+				if (!isPushResponse(res)) {
+					throw new InternalServerError('Malformed response object');
+				}
+				return this.handleRequest(req, res);
+			},
 		);
 	}
 
@@ -111,24 +118,25 @@ export class Push extends TypedEmitter<PushEvents> {
 
 		let connectionError = '';
 
-		// Extract host domain from origin
-		const originHost = headers.origin?.replace(/^https?:\/\//, '');
-
 		if (!pushRef) {
 			connectionError = 'The query parameter "pushRef" is missing!';
-		} else if (!originHost) {
-			this.logger.warn('Origin header is missing');
-
-			connectionError = 'Invalid origin!';
 		} else if (inProduction) {
-			const expectedHost =
-				typeof headers['x-forwarded-host'] === 'string'
-					? headers['x-forwarded-host']
-					: headers.host;
-			if (expectedHost !== originHost) {
+			const validation = ws ? validateWebSocketOrigin(headers) : validateSseOrigin(headers);
+			if (!validation.isValid) {
 				this.logger.warn(
-					`Origin header does NOT match the expected origin. (Origin: "${originHost}", Expected: "${expectedHost}")`,
-					{ headers: pick(headers, ['host', 'origin', 'x-forwarded-proto', 'x-forwarded-host']) },
+					'Origin header does NOT match the expected origin. ' +
+						`(Origin: "${headers.origin}" -> "${validation.originInfo?.host || 'N/A'}", ` +
+						`Expected: "${validation.rawExpectedHost}" -> "${validation.expectedHost}", ` +
+						`Protocol: "${validation.expectedProtocol}")`,
+					{
+						headers: pick(headers, [
+							'host',
+							'origin',
+							'x-forwarded-proto',
+							'x-forwarded-host',
+							'forwarded',
+						]),
+					},
 				);
 				connectionError = 'Invalid origin!';
 			}
@@ -164,17 +172,34 @@ export class Push extends TypedEmitter<PushEvents> {
 		return this.backend.hasPushRef(pushRef);
 	}
 
-	send(pushMsg: PushMessage, pushRef: string) {
-		if (this.shouldRelayViaPubSub(pushRef)) {
-			this.relayViaPubSub(pushMsg, pushRef);
-			return;
+	/**
+	 * Send a push message to a specific push ref, if it belongs to the given user.
+	 *
+	 * @param asBinary - Whether to send the message as a binary frames or text frames
+	 */
+	send(
+		pushMsg: PushMessage,
+		pushRef: string,
+		userId: User['id'] | undefined,
+		asBinary: boolean = false,
+	): void {
+		if (userId === undefined) {
+			this.logger.debug(`Skipped "${pushMsg.type}" for session "${pushRef}" without a user.`, {
+				pushRef,
+			});
+		} else if (this.shouldRelayViaPubSub(pushRef, userId)) {
+			this.relayViaPubSub(pushMsg, pushRef, userId, asBinary);
+		} else {
+			this.backend.sendToOne(pushMsg, pushRef, userId, asBinary);
 		}
-
-		this.backend.sendToOne(pushMsg, pushRef);
 	}
 
-	sendToUsers(pushMsg: PushMessage, userIds: Array<User['id']>) {
-		this.backend.sendToUsers(pushMsg, userIds);
+	sendToUsers(
+		pushMsg: PushMessage,
+		userIds: Array<User['id']>,
+		options?: { excludePushRef?: string },
+	) {
+		this.backend.sendToUsers(pushMsg, userIds, options);
 	}
 
 	@OnShutdown()
@@ -199,16 +224,22 @@ export class Push extends TypedEmitter<PushEvents> {
 	 * the main who holds the session for the execution will push events to
 	 * the frontend who commissioned the execution.
 	 */
-	private shouldRelayViaPubSub(pushRef: string) {
+	private shouldRelayViaPubSub(pushRef: string, userId: User['id']): boolean {
 		const { isWorker, isMultiMain } = this.instanceSettings;
 
-		return isWorker || (isMultiMain && !this.hasPushRef(pushRef));
+		return isWorker || (isMultiMain && !this.backend.hasPushRefOfUser(pushRef, userId));
 	}
 
 	@OnPubSubEvent('relay-execution-lifecycle-event', { instanceType: 'main' })
-	handleRelayExecutionLifecycleEvent({ pushRef, ...pushMsg }: PushMessage & { pushRef: string }) {
-		if (!this.hasPushRef(pushRef)) return;
-		this.send(pushMsg, pushRef);
+	handleRelayExecutionLifecycleEvent({
+		pushRef,
+		userId,
+		asBinary,
+		...pushMsg
+	}: PushMessage & { asBinary: boolean; pushRef: string; userId?: User['id'] }): void {
+		if (this.backend.hasPushRefOfUser(pushRef, userId)) {
+			this.send(pushMsg, pushRef, userId, asBinary);
+		}
 	}
 
 	/**
@@ -217,38 +248,35 @@ export class Push extends TypedEmitter<PushEvents> {
 	 *
 	 * See {@link shouldRelayViaPubSub} for more details.
 	 */
-	private relayViaPubSub(pushMsg: PushMessage, pushRef: string) {
-		const eventSizeBytes = new TextEncoder().encode(JSON.stringify(pushMsg.data)).length;
+	private relayViaPubSub(
+		pushMsg: PushMessage,
+		pushRef: string,
+		userId: User['id'],
+		asBinary: boolean = false,
+	): void {
+		const { type } = pushMsg;
 
-		if (eventSizeBytes <= MAX_PAYLOAD_SIZE_BYTES) {
-			void this.publisher.publishCommand({
-				command: 'relay-execution-lifecycle-event',
-				payload: { ...pushMsg, pushRef },
-			});
-			return;
-		}
+		if (type === 'nodeExecuteAfterData') {
+			const eventSizeBytes = new TextEncoder().encode(JSON.stringify(pushMsg.data)).length;
 
-		// too large for pubsub channel, trim it
+			if (eventSizeBytes > MAX_PUBSUB_PAYLOAD_BYTES) {
+				const eventMb = toMb(eventSizeBytes);
+				const maxMb = toMb(MAX_PUBSUB_PAYLOAD_BYTES);
 
-		const pushMsgCopy = deepCopy(pushMsg);
-
-		const toMb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(0);
-		const eventMb = toMb(eventSizeBytes);
-		const maxMb = toMb(MAX_PAYLOAD_SIZE_BYTES);
-		const { type } = pushMsgCopy;
-
-		this.logger.warn(`Size of "${type}" (${eventMb} MB) exceeds max size ${maxMb} MB. Trimming...`);
-
-		if (type === 'nodeExecuteAfter') {
-			pushMsgCopy.data.itemCount = pushMsgCopy.data.data.data?.main[0]?.length ?? 1;
-			pushMsgCopy.data.data.data = TRIMMED_TASK_DATA_CONNECTIONS;
-		} else if (type === 'executionFinished') {
-			pushMsgCopy.data.rawData = ''; // prompt client to fetch from DB
+				this.logger.warn(
+					`Size of "${type}" (${eventMb} MB) exceeds max size ${maxMb} MB. Skipping...`,
+				);
+				// In case of nodeExecuteAfterData, we omit the message entirely. We
+				// already include the amount of items in the nodeExecuteAfter message,
+				// based on which the FE will construct placeholder data. The actual
+				// data is then fetched at the end of the execution.
+				return;
+			}
 		}
 
 		void this.publisher.publishCommand({
 			command: 'relay-execution-lifecycle-event',
-			payload: { ...pushMsgCopy, pushRef },
+			payload: { ...pushMsg, pushRef, userId, asBinary },
 		});
 	}
 }

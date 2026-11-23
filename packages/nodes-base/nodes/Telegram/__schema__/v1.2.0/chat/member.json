@@ -7,6 +7,9 @@
         "result": {
             "type": "object",
             "properties": {
+                "is_anonymous": {
+                    "type": "boolean"
+                },
                 "status": {
                     "type": "string"
                 },
@@ -36,5 +39,5 @@
             }
         }
     },
-    "version": 5
+    "version": 7
 }

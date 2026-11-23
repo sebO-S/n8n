@@ -8,7 +8,7 @@ import type {
 	INodeTypeDescription,
 	IPairedItemData,
 } from 'n8n-workflow';
-import { NodeConnectionTypes, deepCopy } from 'n8n-workflow';
+import { NodeConnectionTypes, READ_ONLY_ANNOTATIONS, deepCopy } from 'n8n-workflow';
 
 import { oldVersionNotice } from '@utils/descriptions';
 
@@ -20,8 +20,8 @@ export class MergeV1 implements INodeType {
 	constructor(baseDescription: INodeTypeBaseDescription) {
 		this.description = {
 			...baseDescription,
-			icon: 'fa:code-branch',
 			version: 1,
+			annotations: READ_ONLY_ANNOTATIONS,
 			defaults: {
 				name: 'Merge',
 				color: '#00bbcc',

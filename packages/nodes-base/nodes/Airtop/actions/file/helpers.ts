@@ -1,10 +1,15 @@
 import pick from 'lodash/pick';
 import type { IExecuteFunctions } from 'n8n-workflow';
-import { NodeApiError } from 'n8n-workflow';
+import { NodeApiError, requestPath } from 'n8n-workflow';
 
-import { BASE_URL, ERROR_MESSAGES, OPERATION_TIMEOUT } from '../../constants';
+import { ERROR_MESSAGES, OPERATION_TIMEOUT } from '../../constants';
+import { waitForSessionEvent } from '../../GenericFunctions';
 import { apiRequest } from '../../transport';
-import type { IAirtopResponseWithFiles, IAirtopFileInputRequest } from '../../transport/types';
+import type {
+	IAirtopFileInputRequest,
+	IAirtopResponseWithFiles,
+	IAirtopServerEvent,
+} from '../../transport/types';
 
 /**
  * Fetches all files from the Airtop API using pagination
@@ -16,7 +21,7 @@ export async function requestAllFiles(
 	this: IExecuteFunctions,
 	sessionIds: string,
 ): Promise<IAirtopResponseWithFiles> {
-	const endpoint = '/files';
+	const endpoint = requestPath`/files`;
 	let hasMore = true;
 	let currentOffset = 0;
 	const limit = 100;
@@ -34,7 +39,7 @@ export async function requestAllFiles(
 		)) as IAirtopResponseWithFiles;
 		// add files to the array
 		if (responseData.data?.files && Array.isArray(responseData.data?.files)) {
-			files.push(...responseData.data.files);
+			files.push.apply(files, responseData.data.files);
 		}
 		// check if there are more files
 		hasMore = Boolean(responseData.data?.pagination?.hasMore);
@@ -68,7 +73,6 @@ export async function pollFileUntilAvailable(
 ): Promise<string> {
 	let fileStatus = '';
 	const startTime = Date.now();
-
 	while (fileStatus !== 'available') {
 		const elapsedTime = Date.now() - startTime;
 		if (elapsedTime >= timeout) {
@@ -78,9 +82,8 @@ export async function pollFileUntilAvailable(
 			});
 		}
 
-		const response = await apiRequest.call(this, 'GET', `/files/${fileId}`);
+		const response = await apiRequest.call(this, 'GET', requestPath`/files/${fileId}`);
 		fileStatus = response.data?.status as string;
-
 		// Wait before the next polling attempt
 		await new Promise((resolve) => setTimeout(resolve, intervalSeconds * 1000));
 	}
@@ -106,7 +109,10 @@ export async function createAndUploadFile(
 	pollingFunction = pollFileUntilAvailable,
 ): Promise<string> {
 	// Create file entry
-	const createResponse = await apiRequest.call(this, 'POST', '/files', { fileName, fileType });
+	const createResponse = await apiRequest.call(this, 'POST', requestPath`/files`, {
+		fileName,
+		fileType,
+	});
 
 	const fileId = createResponse.data?.id;
 	const uploadUrl = createResponse.data?.uploadUrl as string;
@@ -147,24 +153,23 @@ export async function waitForFileInSession(
 	fileId: string,
 	timeout = OPERATION_TIMEOUT,
 ): Promise<void> {
-	const url = `${BASE_URL}/files/${fileId}`;
-	const isFileInSession = async (): Promise<boolean> => {
-		const fileInfo = (await apiRequest.call(this, 'GET', url)) as IAirtopResponseWithFiles;
-		return Boolean(fileInfo.data?.sessionIds?.includes(sessionId));
+	// Wait for a "file_upload_status" event with status "available" or "upload_failed"
+	const condition = (sessionEvent: IAirtopServerEvent) => {
+		const { event, status } = sessionEvent;
+		return (
+			sessionEvent.fileId === fileId &&
+			event === 'file_upload_status' &&
+			(status === 'available' || status === 'upload_failed')
+		);
 	};
 
-	const startTime = Date.now();
-	while (!(await isFileInSession())) {
-		const elapsedTime = Date.now() - startTime;
-		// throw error if timeout is reached
-		if (elapsedTime >= timeout) {
-			throw new NodeApiError(this.getNode(), {
-				message: ERROR_MESSAGES.TIMEOUT_REACHED,
-				code: 500,
-			});
-		}
-		// wait 1 second before checking again
-		await new Promise((resolve) => setTimeout(resolve, 1000));
+	const event = await waitForSessionEvent.call(this, sessionId, condition, timeout);
+	if (event.status === 'upload_failed') {
+		const error = new NodeApiError(this.getNode(), {
+			message: event.eventData?.error ?? `Upload failed for File ID: ${fileId}`,
+			code: 500,
+		});
+		throw error;
 	}
 }
 
@@ -183,7 +188,9 @@ export async function pushFileToSession(
 	pollingFunction = waitForFileInSession,
 ): Promise<void> {
 	// Push file into session
-	await apiRequest.call(this, 'POST', `/files/${fileId}/push`, { sessionIds: [sessionId] });
+	await apiRequest.call(this, 'POST', requestPath`/files/${fileId}/push`, {
+		sessionIds: [sessionId],
+	});
 	await pollingFunction.call(this, sessionId, fileId);
 }
 
@@ -202,7 +209,7 @@ export async function triggerFileInput(
 	await apiRequest.call(
 		this,
 		'POST',
-		`/sessions/${request.sessionId}/windows/${request.windowId}/file-input`,
+		requestPath`/sessions/${request.sessionId}/windows/${request.windowId}/file-input`,
 		pick(request, ['fileId', 'elementDescription', 'includeHiddenElements']),
 	);
 }

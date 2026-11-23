@@ -1,22 +1,25 @@
+import { EventService } from '@n8n/backend-services';
 import { WorkflowRepository } from '@n8n/db';
 import { Command } from '@n8n/decorators';
 import { Container } from '@n8n/di';
 import type { IWorkflowBase, IWorkflowExecutionDataProcess } from 'n8n-workflow';
-import { ExecutionBaseError, UnexpectedError, UserError } from 'n8n-workflow';
+import { ExecutionBaseError } from 'n8n-workflow';
+import { UnexpectedError, UserError } from '@n8n/errors';
 import { z } from 'zod';
 
 import { ActiveExecutions } from '@/active-executions';
 import { OwnershipService } from '@/services/ownership.service';
 import { findCliWorkflowStart, isWorkflowIdValid } from '@/utils';
 import { WorkflowRunner } from '@/workflow-runner';
+import { getWorkflowProjectDetailsSafe } from '@/workflows/utils';
 
 import { BaseCommand } from './base-command';
-import config from '../config';
 
 const flagsSchema = z.object({
 	id: z.string().describe('id of the workflow to execute').optional(),
 	rawOutput: z.boolean().describe('Outputs only JSON data, with no other text').optional(),
 	/**@deprecated */
+	// oxlint-disable-next-line typescript/no-deprecated -- Parse the removed flag so the command can explain how to replace it.
 	file: z.string().describe('DEPRECATED: Please use --id instead').optional(),
 });
 
@@ -29,10 +32,16 @@ const flagsSchema = z.object({
 export class Execute extends BaseCommand<z.infer<typeof flagsSchema>> {
 	override needsCommunityPackages = true;
 
-	override needsTaskRunner = true;
+	override needsExpressionEngine = true;
+
+	override needsCodeExecution = true;
 
 	async init() {
 		await super.init();
+		await this.initLicense();
+		await this.initPolicyEnforcement();
+		await this.initExecutionLedger();
+		await this.initCommunityPackages();
 		await this.initBinaryDataService();
 		await this.initDataDeduplicationService();
 		await this.initExternalHooks();
@@ -46,6 +55,7 @@ export class Execute extends BaseCommand<z.infer<typeof flagsSchema>> {
 			return;
 		}
 
+		// oxlint-disable-next-line typescript/no-deprecated
 		if (flags.file) {
 			throw new UserError(
 				'The --file flag is no longer supported. Please first import the workflow and then execute it using the --id flag.',
@@ -77,23 +87,37 @@ export class Execute extends BaseCommand<z.infer<typeof flagsSchema>> {
 		const startingNode = findCliWorkflowStart(workflowData.nodes);
 
 		const user = await Container.get(OwnershipService).getInstanceOwner();
+		const { projectId, projectName } = await getWorkflowProjectDetailsSafe(
+			Container.get(OwnershipService),
+			workflowData.id,
+		);
 		const runData: IWorkflowExecutionDataProcess = {
 			executionMode: 'cli',
-			startNodes: [{ name: startingNode.name, sourceData: null }],
+			triggerToStartFrom: { name: startingNode.name },
 			workflowData,
 			userId: user.id,
 		};
 
 		const workflowRunner = Container.get(WorkflowRunner);
 
-		if (config.getEnv('executions.mode') === 'queue') {
+		if (this.globalConfig.executions.mode === 'queue') {
 			this.logger.warn(
 				'CLI command `execute` does not support queue mode. Falling back to regular mode.',
 			);
-			workflowRunner.setExecutionMode('regular');
+			this.globalConfig.executions.mode = 'regular';
 		}
 
 		const executionId = await workflowRunner.run(runData);
+
+		Container.get(EventService).emit('workflow-executed', {
+			user: { id: user.id },
+			workflowId: workflowData.id,
+			workflowName: workflowData.name,
+			executionId,
+			projectId,
+			projectName,
+			source: 'cli',
+		});
 
 		const activeExecutions = Container.get(ActiveExecutions);
 		const data = await activeExecutions.getPostExecutePromise(executionId);

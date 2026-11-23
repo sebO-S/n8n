@@ -23,7 +23,6 @@ n8n is a workflow automation platform that gives technical teams the flexibility
   - [Available integrations](#available-integrations)
   - [Documentation](#documentation)
   - [Start n8n in Docker](#start-n8n-in-docker)
-  - [Start n8n with tunnel](#start-n8n-with-tunnel)
   - [Use with PostgreSQL](#use-with-postgresql)
   - [Passing sensitive data using files](#passing-sensitive-data-using-files)
   - [Example server setups](#example-server-setups)
@@ -74,25 +73,6 @@ You can then access n8n by opening:
 To save your work between container restarts, it also mounts a docker volume, `n8n_data`. The workflow data gets saved in an SQLite database in the user folder (`/home/node/.n8n`). This folder also contains important data like the webhook URL and the encryption key used for securing credentials.
 
 If this data can't be found at startup n8n automatically creates a new key and any existing credentials can no longer be decrypted.
-
-## Start n8n with tunnel
-
-> **WARNING**: This is only meant for local development and testing and should **NOT** be used in production!
-
-n8n must be reachable from the internet to make use of webhooks - essential for triggering workflows from external web-based services such as GitHub. To make this easier, n8n has a special tunnel service which redirects requests from our servers to your local n8n instance. You can inspect the code running this service here: [https://github.com/n8n-io/localtunnel](https://github.com/n8n-io/localtunnel)
-
-To use it simply start n8n with `--tunnel`
-
-```bash
-docker volume create n8n_data
-
-docker run -it --rm \
- --name n8n \
- -p 5678:5678 \
- -v n8n_data:/home/node/.n8n \
- docker.n8n.io/n8nio/n8n \
- start --tunnel
-```
 
 ## Use with PostgreSQL
 
@@ -165,6 +145,42 @@ docker pull docker.n8n.io/n8nio/n8n:0.220.1
 ```bash
 docker pull docker.n8n.io/n8nio/n8n:next
 ```
+
+### About `-pc` tags
+
+Tags with a `-pc` suffix (for example `n8nio/n8n:2.36.0-pc`) are a pointer-compressed variant, internal to n8n Cloud. They carry no support or stability guarantees and can change or disappear without notice. Use the regular tags instead.
+
+### About `-debian` tags
+
+Tags with a `-debian` suffix (for example `n8nio/n8n:2.41.0-debian`) use Debian (glibc) instead of Alpine (musl). Use them only to add a vendor library that needs glibc, for example Oracle Instant Client for Thick mode or the IBM Db2 driver (`ibm_db`). Use the regular tags otherwise.
+
+**The `-debian` tags are a preview.** They can change without notice, and they report more unfixed OS vulnerabilities than the regular tags.
+
+Like the regular image, this image has no package manager, so `RUN apt-get install` does not work in a derived image. Build the library in a stage that has one, then copy it in:
+
+1. Start a build stage from an image with `apt` and the same Debian release: `debian:trixie-slim`, or `node:26-trixie` if the library is a Node native addon that you must compile.
+2. Install or download the library in that stage.
+3. `COPY --from` the files into `n8nio/n8n:<version>-debian`. Set `LD_LIBRARY_PATH` or `NODE_PATH` if the library needs it.
+
+This example adds Oracle Instant Client:
+
+```dockerfile
+FROM debian:trixie-slim AS oracle
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip && \
+    case "$TARGETARCH" in \
+      amd64) zip=instantclient-basiclite-linuxx64.zip ;; \
+      arm64) zip=instantclient-basiclite-linux-arm64.zip ;; \
+    esac && \
+    curl -fsSL -o /tmp/ic.zip "https://download.oracle.com/otn_software/linux/instantclient/$zip" && \
+    unzip -q /tmp/ic.zip -d /opt/oracle && mv /opt/oracle/instantclient_* /opt/oracle/instantclient
+
+FROM n8nio/n8n:2.41.0-debian
+COPY --from=oracle /opt/oracle/instantclient /opt/oracle/instantclient
+ENV LD_LIBRARY_PATH=/opt/oracle/instantclient
+```
+
+**Use the same image in every n8n container.** If a deployment has more than one n8n container, for example in queue mode or multi-main mode, all containers must use the same image. Do not mix Alpine and Debian images, regular and derived images, or different n8n versions. n8n does not support a deployment with mixed images.
 
 Stop the container and start it again:
 

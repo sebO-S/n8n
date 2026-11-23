@@ -1,7 +1,7 @@
 import { NodeConnectionTypes, type INode, type IPinData, type IRunData } from 'n8n-workflow';
 
 import type { DirectedGraph } from './directed-graph';
-import { getIncomingData, getIncomingDataFromAnyRun } from './get-incoming-data';
+import { getIncomingData, getIncomingDataForConnection } from './get-incoming-data';
 
 /**
  * A node is dirty if either of the following is true:
@@ -25,8 +25,8 @@ export function isDirty(node: INode, runData: IRunData = {}, pinData: IPinData =
 		return true;
 	}
 
-	// TODO: implement
-	const hasAnError = false;
+	const hasAnError =
+		runData?.[node.name]?.some((taskData) => taskData.error !== undefined) ?? false;
 
 	if (hasAnError) {
 		return true;
@@ -83,7 +83,11 @@ function findStartNodesRecursive(
 			// last run
 			-1,
 			NodeConnectionTypes.Main,
-			0,
+			// Although this is a Loop node, the graph may not actually have a loop here e.g.,
+			// while the workflow is under development. If there's not a loop, we treat the loop
+			// node as a normal node and take the data from the first output at index 1.
+			// If there *is* a loop, we take the data from the `done` output at index 0.
+			isALoop(graph, current) ? 0 : 1,
 		);
 
 		if (nodeRunData === null || nodeRunData.length === 0) {
@@ -101,18 +105,8 @@ function findStartNodesRecursive(
 	// Recurse with every direct child that is part of the sub graph.
 	const outGoingConnections = graph.getDirectChildConnections(current);
 	for (const outGoingConnection of outGoingConnections) {
-		const nodeRunData = getIncomingDataFromAnyRun(
-			runData,
-			outGoingConnection.from.name,
-			outGoingConnection.type,
-			outGoingConnection.outputIndex,
-		);
-
-		// If the node has multiple outputs, only follow the outputs that have run data.
-		const hasNoRunData =
-			nodeRunData === null || nodeRunData === undefined || nodeRunData.data.length === 0;
-		const hasNoPinnedData = pinData[outGoingConnection.from.name] === undefined;
-		if (hasNoRunData && hasNoPinnedData) {
+		// If the node has multiple outputs, only follow the outputs that have data.
+		if (!getIncomingDataForConnection(outGoingConnection, runData, pinData)) {
 			continue;
 		}
 
@@ -128,6 +122,10 @@ function findStartNodesRecursive(
 	}
 
 	return startNodes;
+}
+
+function isALoop(graph: DirectedGraph, node: INode): boolean {
+	return graph.getChildren(node).has(node);
 }
 
 /**

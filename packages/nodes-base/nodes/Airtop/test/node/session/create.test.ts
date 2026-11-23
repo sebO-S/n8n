@@ -1,3 +1,4 @@
+import { requestPath } from 'n8n-workflow';
 import * as create from '../../../actions/session/create.operation';
 import { ERROR_MESSAGES, SESSION_STATUS } from '../../../constants';
 import * as transport from '../../../transport';
@@ -11,15 +12,16 @@ const baseNodeParameters = {
 	resource: 'session',
 	operation: 'create',
 	profileName: 'test-profile',
+	record: false,
 	timeoutMinutes: 10,
 	saveProfileOnTermination: false,
 };
 
-jest.mock('../../../transport', () => {
-	const originalModule = jest.requireActual<typeof transport>('../../../transport');
+vi.mock('../../../transport', async () => {
+	const originalModule = await vi.importActual<typeof transport>('../../../transport');
 	return {
 		...originalModule,
-		apiRequest: jest.fn(async function () {
+		apiRequest: vi.fn(async function () {
 			return {
 				...mockCreatedSession,
 			};
@@ -28,12 +30,8 @@ jest.mock('../../../transport', () => {
 });
 
 describe('Test Airtop, session create operation', () => {
-	afterAll(() => {
-		jest.unmock('../../../transport');
-	});
-
 	afterEach(() => {
-		jest.clearAllMocks();
+		vi.clearAllMocks();
 	});
 	/**
 	 * Minimal parameters
@@ -47,11 +45,12 @@ describe('Test Airtop, session create operation', () => {
 		const result = await create.execute.call(createMockExecuteFunction(nodeParameters), 0);
 
 		expect(transport.apiRequest).toHaveBeenCalledTimes(1);
-		expect(transport.apiRequest).toHaveBeenCalledWith('POST', '/sessions', {
+		expect(transport.apiRequest).toHaveBeenCalledWith('POST', requestPath`/sessions`, {
 			configuration: {
 				profileName: 'test-profile',
 				solveCaptcha: false,
 				timeoutMinutes: 10,
+				record: false,
 				proxy: false,
 			},
 		});
@@ -78,18 +77,19 @@ describe('Test Airtop, session create operation', () => {
 		const result = await create.execute.call(createMockExecuteFunction(nodeParameters), 0);
 
 		expect(transport.apiRequest).toHaveBeenCalledTimes(2);
-		expect(transport.apiRequest).toHaveBeenNthCalledWith(1, 'POST', '/sessions', {
+		expect(transport.apiRequest).toHaveBeenNthCalledWith(1, 'POST', requestPath`/sessions`, {
 			configuration: {
 				profileName: 'test-profile',
 				solveCaptcha: false,
 				timeoutMinutes: 10,
+				record: false,
 				proxy: false,
 			},
 		});
 		expect(transport.apiRequest).toHaveBeenNthCalledWith(
 			2,
 			'PUT',
-			'/sessions/test-session-123/save-profile-on-termination/test-profile',
+			requestPath`/sessions/test-session-123/save-profile-on-termination/test-profile`,
 		);
 
 		expect(result).toEqual([
@@ -114,11 +114,12 @@ describe('Test Airtop, session create operation', () => {
 		const result = await create.execute.call(createMockExecuteFunction(nodeParameters), 0);
 
 		expect(transport.apiRequest).toHaveBeenCalledTimes(1);
-		expect(transport.apiRequest).toHaveBeenCalledWith('POST', '/sessions', {
+		expect(transport.apiRequest).toHaveBeenCalledWith('POST', requestPath`/sessions`, {
 			configuration: {
 				profileName: 'test-profile',
 				solveCaptcha: false,
 				timeoutMinutes: 10,
+				record: false,
 				proxy: true,
 			},
 		});
@@ -143,11 +144,12 @@ describe('Test Airtop, session create operation', () => {
 		const result = await create.execute.call(createMockExecuteFunction(nodeParameters), 0);
 
 		expect(transport.apiRequest).toHaveBeenCalledTimes(1);
-		expect(transport.apiRequest).toHaveBeenCalledWith('POST', '/sessions', {
+		expect(transport.apiRequest).toHaveBeenCalledWith('POST', requestPath`/sessions`, {
 			configuration: {
 				profileName: 'test-profile',
 				solveCaptcha: false,
 				timeoutMinutes: 10,
+				record: false,
 				proxy: { country: 'US', sticky: true },
 			},
 		});
@@ -172,11 +174,12 @@ describe('Test Airtop, session create operation', () => {
 		const result = await create.execute.call(createMockExecuteFunction(nodeParameters), 0);
 
 		expect(transport.apiRequest).toHaveBeenCalledTimes(1);
-		expect(transport.apiRequest).toHaveBeenCalledWith('POST', '/sessions', {
+		expect(transport.apiRequest).toHaveBeenCalledWith('POST', requestPath`/sessions`, {
 			configuration: {
 				profileName: 'test-profile',
 				solveCaptcha: false,
 				timeoutMinutes: 10,
+				record: false,
 				proxy: 'http://proxy.example.com:8080',
 			},
 		});
@@ -216,11 +219,12 @@ describe('Test Airtop, session create operation', () => {
 		const result = await create.execute.call(createMockExecuteFunction(nodeParameters), 0);
 
 		expect(transport.apiRequest).toHaveBeenCalledTimes(1);
-		expect(transport.apiRequest).toHaveBeenCalledWith('POST', '/sessions', {
+		expect(transport.apiRequest).toHaveBeenCalledWith('POST', requestPath`/sessions`, {
 			configuration: {
 				profileName: 'test-profile',
 				solveCaptcha: true,
 				timeoutMinutes: 10,
+				record: false,
 				proxy: false,
 			},
 		});
@@ -248,13 +252,46 @@ describe('Test Airtop, session create operation', () => {
 		const result = await create.execute.call(createMockExecuteFunction(nodeParameters), 0);
 
 		expect(transport.apiRequest).toHaveBeenCalledTimes(1);
-		expect(transport.apiRequest).toHaveBeenCalledWith('POST', '/sessions', {
+		expect(transport.apiRequest).toHaveBeenCalledWith('POST', requestPath`/sessions`, {
 			configuration: {
 				profileName: 'test-profile',
 				solveCaptcha: false,
 				timeoutMinutes: 10,
+				record: false,
 				proxy: false,
 				extensionIds: ['extId1', 'extId2'],
+			},
+		});
+
+		expect(result).toEqual([
+			{
+				json: {
+					sessionId: 'test-session-123',
+					data: { ...mockCreatedSession.data },
+				},
+			},
+		]);
+	});
+	/**
+	 * Session recording
+	 */
+	it('should create a session with recording enabled', async () => {
+		const nodeParameters = {
+			...baseNodeParameters,
+			record: true,
+			proxy: 'none',
+		};
+
+		const result = await create.execute.call(createMockExecuteFunction(nodeParameters), 0);
+
+		expect(transport.apiRequest).toHaveBeenCalledTimes(1);
+		expect(transport.apiRequest).toHaveBeenCalledWith('POST', requestPath`/sessions`, {
+			configuration: {
+				profileName: 'test-profile',
+				solveCaptcha: false,
+				timeoutMinutes: 10,
+				record: true,
+				proxy: false,
 			},
 		});
 

@@ -13,8 +13,11 @@ import type {
 	IPollFunctions,
 	IRequestOptions,
 	JsonObject,
+	RequestPath,
+	RequestUrl,
+	WithRequestTarget,
 } from 'n8n-workflow';
-import { NodeApiError, NodeOperationError } from 'n8n-workflow';
+import { NodeApiError, NodeOperationError, requestPath, requestUrl } from 'n8n-workflow';
 import MailComposer from 'nodemailer/lib/mail-composer';
 
 import type { IEmail } from '../../../utils/sendAndWait/interfaces';
@@ -30,13 +33,12 @@ export interface IAttachments {
 export async function googleApiRequest(
 	this: IExecuteFunctions | ILoadOptionsFunctions | IPollFunctions,
 	method: IHttpRequestMethods,
-	endpoint: string,
+	endpoint: RequestPath,
 	body: IDataObject = {},
 	qs: IDataObject = {},
-	uri?: string,
-	option: IDataObject = {},
+	uri?: RequestUrl,
 ) {
-	let options: IRequestOptions = {
+	const options: WithRequestTarget<IRequestOptions, 'uri'> = {
 		headers: {
 			Accept: 'application/json',
 			'Content-Type': 'application/json',
@@ -44,14 +46,12 @@ export async function googleApiRequest(
 		method,
 		body,
 		qs,
-		uri: uri || `https://www.googleapis.com${endpoint}`,
+		uri: uri ?? requestUrl`https://www.googleapis.com${endpoint}`,
 		qsStringifyOptions: {
 			arrayFormat: 'repeat',
 		},
 		json: true,
 	};
-
-	options = Object.assign({}, options, option);
 
 	try {
 		if (Object.keys(body).length === 0) {
@@ -207,7 +207,7 @@ export async function parseRawEmail(
 //------------------------------------------------------------------------------------------------------------------------------------------
 
 export async function encodeEmail(email: IEmail) {
-	// https://nodemailer.com/extras/mailcomposer/#e-mail-message-fields
+	// https://nodemailer.com/extras/mailcomposer#message-fields
 	const mailOptions = {
 		from: email.from,
 		to: email.to,
@@ -240,12 +240,14 @@ export async function encodeEmail(email: IEmail) {
 		mailOptions.attachments = attachments;
 	}
 
+	mailOptions.disableFileAccess = true;
+	mailOptions.disableUrlAccess = true;
+
 	const mail = new MailComposer(mailOptions).compile();
 
 	// by default the bcc headers are deleted when the mail is built.
 	// So add keepBcc flag to override such behaviour. Only works when
 	// the flag is set after the compilation.
-	// @ts-expect-error - https://nodemailer.com/extras/mailcomposer/#bcc
 	mail.keepBcc = true;
 
 	const mailBody = await mail.build();
@@ -257,7 +259,7 @@ export async function googleApiRequestAllItems(
 	this: IExecuteFunctions | ILoadOptionsFunctions | IPollFunctions,
 	propertyName: string,
 	method: IHttpRequestMethods,
-	endpoint: string,
+	endpoint: RequestPath,
 
 	body: any = {},
 	query: IDataObject = {},
@@ -367,8 +369,8 @@ export function prepareQuery(
 		} else {
 			qs.q = `is:${qs.readStatus}`;
 		}
-		delete qs.readStatus;
 	}
+	delete qs.readStatus;
 
 	if (qs.receivedAfter) {
 		qs.q = prepareTimestamp(
@@ -402,7 +404,7 @@ export function prepareEmailsInput(
 	itemIndex: number,
 ) {
 	let emails = '';
-
+	input = String(input ?? '');
 	input.split(',').forEach((entry) => {
 		const email = entry.trim();
 
@@ -430,7 +432,7 @@ export function prepareEmailBody(
 	instanceId?: string,
 ) {
 	const emailType = this.getNodeParameter('emailType', itemIndex) as string;
-	let message = (this.getNodeParameter('message', itemIndex, '') as string).trim();
+	let message = String(this.getNodeParameter('message', itemIndex, '') ?? '').trim();
 
 	if (appendAttribution) {
 		const attributionText = 'This email was sent automatically with ';
@@ -473,7 +475,7 @@ export async function prepareEmailAttachments(
 
 	if (attachments && !isEmpty(attachments)) {
 		for (const { property } of attachments) {
-			for (const name of (property as string).split(',')) {
+			for (const name of String(property ?? '').split(',')) {
 				const binaryData = this.helpers.assertBinaryData(itemIndex, name);
 				const binaryDataBuffer = await this.helpers.getBinaryDataBuffer(itemIndex, name);
 
@@ -507,116 +509,15 @@ export function unescapeSnippets(items: INodeExecutionData[]) {
 	return result;
 }
 
-export async function replyToEmail(
-	this: IExecuteFunctions,
-	gmailId: string,
-	options: IDataObject,
-	itemIndex: number,
-) {
-	let qs: IDataObject = {};
-
-	let cc = '';
-	let bcc = '';
-
-	if (options.ccList) {
-		cc = prepareEmailsInput.call(this, options.ccList as string, 'CC', itemIndex);
-	}
-
-	if (options.bccList) {
-		bcc = prepareEmailsInput.call(this, options.bccList as string, 'BCC', itemIndex);
-	}
-	let attachments: IDataObject[] = [];
-	if (options.attachmentsUi) {
-		attachments = await prepareEmailAttachments.call(
-			this,
-			options.attachmentsUi as IDataObject,
-			itemIndex,
-		);
-		if (attachments.length) {
-			qs = {
-				userId: 'me',
-				uploadType: 'media',
-			};
-		}
-	}
-
-	const endpoint = `/gmail/v1/users/me/messages/${gmailId}`;
-
-	qs.format = 'metadata';
-
-	const { payload, threadId } = await googleApiRequest.call(this, 'GET', endpoint, {}, qs);
-
-	const subject =
-		payload.headers.filter(
-			(data: { [key: string]: string }) => data.name.toLowerCase() === 'subject',
-		)[0]?.value || '';
-
-	const messageIdGlobal =
-		payload.headers.filter(
-			(data: { [key: string]: string }) => data.name.toLowerCase() === 'message-id',
-		)[0]?.value || '';
-
-	const { emailAddress } = await googleApiRequest.call(this, 'GET', '/gmail/v1/users/me/profile');
-
-	let to = '';
-	const replyToSenderOnly =
-		options.replyToSenderOnly === undefined ? false : (options.replyToSenderOnly as boolean);
-
-	const prepareEmailString = (email: string) => {
-		if (email.includes(emailAddress as string)) return;
-		if (email.includes('<') && email.includes('>')) {
-			to += `${email}, `;
-		} else {
-			to += `<${email}>, `;
-		}
-	};
-
-	for (const header of payload.headers as IDataObject[]) {
-		if (((header.name as string) || '').toLowerCase() === 'from') {
-			const from = header.value as string;
-			if (from.includes('<') && from.includes('>')) {
-				to += `${from}, `;
-			} else {
-				to += `<${from}>, `;
-			}
-		}
-
-		if (((header.name as string) || '').toLowerCase() === 'to' && !replyToSenderOnly) {
-			const toEmails = header.value as string;
-			toEmails.split(',').forEach(prepareEmailString);
-		}
-	}
-
-	let from = '';
-	if (options.senderName) {
-		from = `${options.senderName as string} <${emailAddress}>`;
-	}
-
-	const email: IEmail = {
-		from,
-		to,
-		cc,
-		bcc,
-		subject,
-		attachments,
-		inReplyTo: messageIdGlobal,
-		reference: messageIdGlobal,
-		...prepareEmailBody.call(this, itemIndex),
-	};
-
-	const body = {
-		raw: await encodeEmail(email),
-		threadId,
-	};
-
-	return await googleApiRequest.call(this, 'POST', '/gmail/v1/users/me/messages/send', body, qs);
-}
-
 export async function simplifyOutput(
 	this: IExecuteFunctions | IPollFunctions,
 	data: IDataObject[],
 ) {
-	const labelsData = await googleApiRequest.call(this, 'GET', '/gmail/v1/users/me/labels');
+	const labelsData = await googleApiRequest.call(
+		this,
+		'GET',
+		requestPath`/gmail/v1/users/me/labels`,
+	);
 	const labels = ((labelsData.labels as IDataObject[]) || []).map(({ id, name }) => ({
 		id,
 		name,
@@ -649,7 +550,7 @@ export async function getLabels(this: ILoadOptionsFunctions): Promise<INodePrope
 		this,
 		'labels',
 		'GET',
-		'/gmail/v1/users/me/labels',
+		requestPath`/gmail/v1/users/me/labels`,
 	);
 
 	for (const label of labels) {

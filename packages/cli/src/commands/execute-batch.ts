@@ -6,7 +6,8 @@ import fs from 'fs';
 import { diff } from 'json-diff';
 import pick from 'lodash/pick';
 import type { IRun, ITaskData, IWorkflowBase, IWorkflowExecutionDataProcess } from 'n8n-workflow';
-import { jsonParse, UnexpectedError } from 'n8n-workflow';
+import { jsonParse } from 'n8n-workflow';
+import { UnexpectedError } from '@n8n/errors';
 import os from 'os';
 import { sep } from 'path';
 import { z } from 'zod';
@@ -17,10 +18,8 @@ import { findCliWorkflowStart } from '@/utils';
 import { WorkflowRunner } from '@/workflow-runner';
 
 import { BaseCommand } from './base-command';
-import config from '../config';
 import type {
 	IExecutionResult,
-	INodeSpecialCase,
 	INodeSpecialCases,
 	IResult,
 	IWorkflowExecutionProgress,
@@ -134,7 +133,9 @@ export class ExecuteBatch extends BaseCommand<z.infer<typeof flagsSchema>> {
 
 	override needsCommunityPackages = true;
 
-	override needsTaskRunner = true;
+	override needsExpressionEngine = true;
+
+	override needsCodeExecution = true;
 
 	/**
 	 * Gracefully handles exit.
@@ -190,6 +191,10 @@ export class ExecuteBatch extends BaseCommand<z.infer<typeof flagsSchema>> {
 
 	async init() {
 		await super.init();
+		await this.initLicense();
+		await this.initPolicyEnforcement();
+		await this.initExecutionLedger();
+		await this.initCommunityPackages();
 		await this.initBinaryDataService();
 		await this.initDataDeduplicationService();
 		await this.initExternalHooks();
@@ -618,7 +623,7 @@ export class ExecuteBatch extends BaseCommand<z.infer<typeof flagsSchema>> {
 					const parts = note.split('=');
 					if (parts.length === 2) {
 						if (nodeEdgeCases[node.name] === undefined) {
-							nodeEdgeCases[node.name] = {} as INodeSpecialCase;
+							nodeEdgeCases[node.name] = {};
 						}
 						if (parts[0] === 'CAP_RESULTS_LENGTH') {
 							nodeEdgeCases[node.name].capResults = parseInt(parts[1], 10);
@@ -638,9 +643,9 @@ export class ExecuteBatch extends BaseCommand<z.infer<typeof flagsSchema>> {
 
 		const workflowRunner = Container.get(WorkflowRunner);
 
-		if (config.getEnv('executions.mode') === 'queue') {
+		if (this.globalConfig.executions.mode === 'queue') {
 			this.logger.warn('`executeBatch` does not support queue mode. Falling back to regular mode.');
-			workflowRunner.setExecutionMode('regular');
+			this.globalConfig.executions.mode = 'regular';
 		}
 
 		return await new Promise(async (resolve) => {
@@ -659,7 +664,7 @@ export class ExecuteBatch extends BaseCommand<z.infer<typeof flagsSchema>> {
 
 				const runData: IWorkflowExecutionDataProcess = {
 					executionMode: 'cli',
-					startNodes: [{ name: startingNode.name, sourceData: null }],
+					triggerToStartFrom: { name: startingNode.name },
 					workflowData,
 					userId: ExecuteBatch.instanceOwner.id,
 				};
@@ -682,6 +687,7 @@ export class ExecuteBatch extends BaseCommand<z.infer<typeof flagsSchema>> {
 						(Date.parse(data.stoppedAt as unknown as string) -
 							Date.parse(data.startedAt as unknown as string)) /
 						1000;
+					// oxlint-disable-next-line typescript/no-deprecated
 					executionResult.finished = data?.finished !== undefined;
 
 					const resultError = data.data.resultData.error;

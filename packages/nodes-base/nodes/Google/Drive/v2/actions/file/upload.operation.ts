@@ -1,9 +1,12 @@
+import FormData from 'form-data';
+
 import type {
 	IDataObject,
 	IExecuteFunctions,
 	INodeExecutionData,
 	INodeProperties,
 } from 'n8n-workflow';
+import { requestPath } from 'n8n-workflow';
 
 import { updateDisplayOptions } from '@utils/utilities';
 
@@ -97,20 +100,34 @@ export async function execute(this: IExecuteFunctions, i: number): Promise<INode
 	}) as string;
 
 	let uploadId;
+	const metadata = {
+		name,
+		parents: [setParentFolder(folderId, driveId)],
+	};
 	if (Buffer.isBuffer(fileContent)) {
+		const multiPartBody = new FormData();
+		multiPartBody.append('metadata', JSON.stringify(metadata), {
+			contentType: 'application/json',
+		});
+		multiPartBody.append('data', fileContent, {
+			contentType: mimeType,
+			knownLength: contentLength,
+		});
+
 		const response = await googleApiRequest.call(
 			this,
 			'POST',
-			'/upload/drive/v3/files',
-			fileContent,
+			requestPath`/upload/drive/v3/files`,
+			multiPartBody.getBuffer(),
 			{
-				uploadType: 'media',
+				uploadType: 'multipart',
+				supportsAllDrives: true,
 			},
 			undefined,
 			{
 				headers: {
-					'Content-Type': mimeType,
-					'Content-Length': contentLength,
+					'Content-Type': `multipart/related; boundary=${multiPartBody.getBoundary()}`,
+					'Content-Length': multiPartBody.getLengthSync(),
 				},
 			},
 		);
@@ -120,9 +137,12 @@ export async function execute(this: IExecuteFunctions, i: number): Promise<INode
 		const resumableUpload = await googleApiRequest.call(
 			this,
 			'POST',
-			'/upload/drive/v3/files',
-			undefined,
-			{ uploadType: 'resumable' },
+			requestPath`/upload/drive/v3/files`,
+			metadata,
+			{
+				uploadType: 'resumable',
+				supportsAllDrives: true,
+			},
 			undefined,
 			{
 				returnFullResponse: true,
@@ -184,7 +204,7 @@ export async function execute(this: IExecuteFunctions, i: number): Promise<INode
 	const response = await googleApiRequest.call(
 		this,
 		'PATCH',
-		`/drive/v3/files/${uploadId}`,
+		requestPath`/drive/v3/files/${uploadId}`,
 		body,
 		qs,
 	);

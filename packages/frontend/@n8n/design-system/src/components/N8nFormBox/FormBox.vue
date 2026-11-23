@@ -1,11 +1,5 @@
 <script lang="ts" setup>
-import type {
-	FormFieldValue,
-	IFormInput,
-	FormFieldValueUpdate,
-	FormValues,
-} from '@n8n/design-system/types';
-
+import type { FormFieldValue, IFormInput, FormFieldValueUpdate, FormValues } from '../../types';
 import { createFormEventBus } from '../../utils';
 import N8nButton from '../N8nButton';
 import N8nFormInputs from '../N8nFormInputs';
@@ -18,6 +12,7 @@ interface FormBoxProps {
 	buttonText?: string;
 	buttonLoading?: boolean;
 	secondaryButtonText?: string;
+	submitButtonVariant?: 'solid' | 'brand';
 	redirectText?: string;
 	redirectLink?: string;
 }
@@ -29,6 +24,7 @@ withDefaults(defineProps<FormBoxProps>(), {
 	buttonLoading: false,
 	redirectText: '',
 	redirectLink: '',
+	submitButtonVariant: 'solid',
 });
 
 const formBus = createFormEventBus();
@@ -72,6 +68,7 @@ const onSecondaryButtonClick = (event: Event) => emit('secondaryClick', event);
 				:loading="buttonLoading"
 				data-test-id="form-submit-button"
 				size="large"
+				:variant="submitButtonVariant"
 				@click="onButtonClick"
 			/>
 		</div>
@@ -88,19 +85,19 @@ const onSecondaryButtonClick = (event: Event) => emit('secondaryClick', event);
 .heading {
 	display: flex;
 	justify-content: center;
-	margin-bottom: var(--spacing-xl);
+	margin-bottom: var(--spacing--xl);
 }
 
 .container {
-	background-color: var(--color-background-xlight);
-	padding: var(--spacing-l);
-	border: var(--border-base);
-	border-radius: var(--border-radius-large);
+	background-color: var(--color--background--light-3);
+	padding: var(--spacing--lg);
+	border: var(--border);
+	border-radius: var(--radius--lg);
 	box-shadow: 0 4px 16px rgba(99, 77, 255, 0.06);
 }
 
 .inputsContainer {
-	margin-bottom: var(--spacing-xl);
+	margin-bottom: var(--spacing--xl);
 }
 
 .actionContainer {
@@ -110,7 +107,7 @@ const onSecondaryButtonClick = (event: Event) => emit('secondaryClick', event);
 
 .buttonsContainer {
 	composes: actionContainer;
-	margin-bottom: var(--spacing-s);
+	margin-bottom: var(--spacing--sm);
 }
 
 .secondaryButtonContainer {
@@ -120,6 +117,6 @@ const onSecondaryButtonClick = (event: Event) => emit('secondaryClick', event);
 }
 
 .withLabel {
-	margin-bottom: var(--spacing-s);
+	margin-bottom: var(--spacing--sm);
 }
 </style>

@@ -1,22 +1,22 @@
 import { testDb } from '@n8n/backend-test-utils';
-import type { Project, User } from '@n8n/db';
+import type { Person, Project } from '@n8n/db';
 import {
 	CredentialsRepository,
+	PersonRepository,
 	ProjectRepository,
 	SharedCredentialsRepository,
-	UserRepository,
 } from '@n8n/db';
 import { Container } from '@n8n/di';
 import { randomUUID } from 'crypto';
-import { mock } from 'jest-mock-extended';
 import { OPEN_AI_API_CREDENTIAL_TYPE } from 'n8n-workflow';
+import { mock } from 'vitest-mock-extended';
 
 import { FREE_AI_CREDITS_CREDENTIAL_NAME } from '@/constants';
 import { AiService } from '@/services/ai.service';
 
 import { createOwner } from '../shared/db/users';
 import type { SuperAgentTest } from '../shared/types';
-import { setupTestServer } from '../shared/utils';
+import { initCredentialsTypes, setupTestServer } from '../shared/utils';
 
 const createAiCreditsResponse = {
 	apiKey: randomUUID(),
@@ -32,10 +32,14 @@ Container.set(
 
 const testServer = setupTestServer({ endpointGroups: ['ai'] });
 
-let owner: User;
+let owner: Person;
 let ownerPersonalProject: Project;
 
 let authOwnerAgent: SuperAgentTest;
+
+beforeAll(async () => {
+	await initCredentialsTypes();
+});
 
 beforeEach(async () => {
 	await testDb.truncate(['SharedCredentials', 'CredentialsEntity']);
@@ -68,13 +72,19 @@ describe('POST /ai/free-credits', () => {
 
 		expect(scopes).toEqual(
 			[
+				'credential:connect',
 				'credential:create',
+				'credential:createEndUser',
 				'credential:delete',
 				'credential:list',
+				'credential:manageInstance',
 				'credential:move',
 				'credential:read',
 				'credential:share',
+				'credential:shareGlobally',
+				'credential:unshare',
 				'credential:update',
+				'credential:use',
 			].sort(),
 		);
 
@@ -94,8 +104,8 @@ describe('POST /ai/free-credits', () => {
 		expect(sharedCredential.credentials.name).toBe(FREE_AI_CREDITS_CREDENTIAL_NAME);
 		expect(sharedCredential.credentials.isManaged).toBe(true);
 
-		const user = await Container.get(UserRepository).findOneOrFail({ where: { id: owner.id } });
+		const person = await Container.get(PersonRepository).findById(owner.id);
 
-		expect(user.settings?.userClaimedAiCredits).toBe(true);
+		expect(person?.settings?.userClaimedAiCredits).toBe(true);
 	});
 });

@@ -1,6 +1,15 @@
 {
     "type": "object",
     "properties": {
+        "admin_graphql_api_id": {
+            "type": "string"
+        },
+        "created_at": {
+            "type": "string"
+        },
+        "financial_status": {
+            "type": "string"
+        },
         "id": {
             "type": "integer"
         },
@@ -107,12 +116,18 @@
                     "product_exists": {
                         "type": "boolean"
                     },
+                    "product_id": {
+                        "type": "integer"
+                    },
                     "properties": {
                         "type": "array",
                         "items": {
                             "type": "object",
                             "properties": {
                                 "name": {
+                                    "type": "string"
+                                },
+                                "value": {
                                     "type": "string"
                                 }
                             }
@@ -162,6 +177,9 @@
                                         }
                                     }
                                 },
+                                "rate": {
+                                    "type": "number"
+                                },
                                 "title": {
                                     "type": "string"
                                 }
@@ -203,10 +221,25 @@
                                 }
                             }
                         }
+                    },
+                    "variant_id": {
+                        "type": "integer"
+                    },
+                    "vendor": {
+                        "type": "string"
                     }
                 }
             }
+        },
+        "name": {
+            "type": "string"
+        },
+        "order_number": {
+            "type": "integer"
+        },
+        "total_price": {
+            "type": "string"
         }
     },
-    "version": 4
+    "version": 9
 }

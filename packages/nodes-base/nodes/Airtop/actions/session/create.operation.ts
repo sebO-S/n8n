@@ -4,6 +4,7 @@ import {
 	type INodeExecutionData,
 	type INodeProperties,
 } from 'n8n-workflow';
+import { requestPath } from 'n8n-workflow';
 
 import { COUNTRIES } from '../../countries';
 import {
@@ -37,6 +38,16 @@ export const description: INodeProperties[] = [
 		default: false,
 		description:
 			'Whether to automatically save the <a href="https://docs.airtop.ai/guides/how-to/saving-a-profile" target="_blank">Airtop profile</a> for this session upon termination',
+		displayOptions,
+	},
+	/* Session Recording */
+	{
+		displayName: 'Record Session',
+		name: 'record',
+		type: 'boolean',
+		default: false,
+		description:
+			'Whether to record the browser session. <a href="https://docs.airtop.ai/guides/how-to/recording-a-session" target="_blank">More details</a>.',
 		displayOptions,
 	},
 	{
@@ -157,6 +168,7 @@ export async function execute(
 	index: number,
 ): Promise<INodeExecutionData[]> {
 	const profileName = validateProfileName.call(this, index);
+	const record = this.getNodeParameter('record', index, false);
 	const timeoutMinutes = validateTimeoutMinutes.call(this, index);
 	const saveProfileOnTermination = validateSaveProfileOnTermination.call(this, index, profileName);
 	const { proxy } = validateProxy.call(this, index);
@@ -175,6 +187,7 @@ export async function execute(
 			timeoutMinutes,
 			proxy,
 			solveCaptcha,
+			record,
 			...(extensionIds.length > 0 ? { extensionIds } : {}),
 		},
 	};
@@ -185,7 +198,7 @@ export async function execute(
 		await apiRequest.call(
 			this,
 			'PUT',
-			`/sessions/${sessionId}/save-profile-on-termination/${profileName}`,
+			requestPath`/sessions/${sessionId}/save-profile-on-termination/${profileName}`,
 		);
 	}
 
